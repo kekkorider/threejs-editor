@@ -1,6 +1,6 @@
 {
   "name": "@kekkorider/threejs-editor",
-  "version": "2.0.1",
+  "version": "0.0.1",
   "license": "MIT",
   "type": "module",
   "sideEffects": true,

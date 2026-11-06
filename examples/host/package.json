@@ -9,5 +9,8 @@
   },
   "devDependencies": {
     "vite": "^8.3.3"
+  },
+  "dependencies": {
+    "@kekkorider/threejs-editor": "file:../../kekkorider-threejs-editor-0.0.1.tgz"
   }
 }
