@@ -171,6 +171,42 @@
   border-top: 1px solid #3a3a3a;
   flex: none;
 }
+.dock-tabs {
+  height: 26px;
+  display: flex;
+  align-items: stretch;
+  background: #313131;
+  border-bottom: 1px solid var(--line);
+  border-top: 1px solid #3a3a3a;
+  flex: none;
+}
+.dock-tab {
+  border: 0;
+  background: transparent;
+  padding: 0 12px;
+  color: var(--font-dim);
+  font-weight: 650;
+}
+.dock-tab.active { color: var(--font); background: #3a3a3a; }
+.import-dock { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.import-scroll { overflow: auto; min-height: 0; flex: 1; }
+.import-preview {
+  display: flex;
+  justify-content: center;
+  padding: 8px;
+  background: #1e1e1e;
+}
+.import-preview img { max-width: 100%; max-height: 140px; object-fit: contain; }
+.import-play { padding: 6px 8px 0; }
+.import-note { margin: 0; padding: 6px 10px 0; color: var(--font-dim); }
+.import-warning { margin: 0; padding: 6px 10px 0; color: #e0b15a; }
+.import-empty { text-align: left; }
+.import-actions { padding: 8px; border-top: 1px solid var(--line); flex: none; }
+.import-actions .btn { width: 100%; }
+.import-preset { width: 100%; }
+.prop.with-check { grid-template-columns: 16px 92px minmax(0, 1fr); }
+.kind-icon.texture { color: #7eb6ff; }
+.kind-icon.audio { color: #d2a15a; }
 
 .dock-tools {
   display: flex;

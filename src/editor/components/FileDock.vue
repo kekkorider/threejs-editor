@@ -9,7 +9,20 @@ const store = useEditorStore()
 const query = computed(() => store.fileFilter.trim().toLowerCase())
 const empty = computed(() => store.projectTree.length === 0)
 
+function osFiles(transfer: DataTransfer | null): boolean {
+  if (!transfer) return false
+  const types = [...transfer.types]
+  return types.includes('Files') && !types.includes(PROJECT_DRAG_TYPE)
+}
+
 function onRootDrop(event: DragEvent): void {
+  if (osFiles(event.dataTransfer)) {
+    const files = event.dataTransfer?.files
+    if (!files || files.length === 0) return
+    event.preventDefault()
+    void store.importExternalFiles(files, 'res://')
+    return
+  }
   const from = event.dataTransfer?.getData(PROJECT_DRAG_TYPE) ?? ''
   if (!from) return
   event.preventDefault()
@@ -17,8 +30,11 @@ function onRootDrop(event: DragEvent): void {
 }
 
 function onRootOver(event: DragEvent): void {
-  if (!event.dataTransfer || ![...event.dataTransfer.types].includes(PROJECT_DRAG_TYPE)) return
+  if (!event.dataTransfer) return
+  const types = [...event.dataTransfer.types]
+  if (!types.includes(PROJECT_DRAG_TYPE) && !osFiles(event.dataTransfer)) return
   event.preventDefault()
+  if (osFiles(event.dataTransfer)) event.dataTransfer.dropEffect = 'copy'
 }
 </script>
 
