@@ -4,4 +4,7 @@ import { editorProjectPlugin } from './scripts/editorProjectPlugin.ts'
 
 export default defineConfig({
   plugins: [vue(), editorProjectPlugin()],
+  build: {
+    outDir: 'build',
+  },
 })
