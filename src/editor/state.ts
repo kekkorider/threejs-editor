@@ -41,6 +41,7 @@ import { fingerprint } from './history'
 import {
   fileStem,
   hasFile,
+  isMeshFile,
   movePath,
   parentPath,
   projectPaths,
@@ -1742,7 +1743,7 @@ export class EditorState {
     resource.type = type
     resource.params = defaultParams(type)
     resource.name = this.uniqueResourceName(geometryEntry(type).label, this.geometries, resource.id)
-    resource.path = this.retitleFile(resource.path, 'res://meshes', resource.name, '.tres')
+    resource.path = this.retitleFile(resource.path, 'res://meshes', resource.name, '.json')
     this.writeGeometryFile(resource)
     this.rebuildGeometry(resource.id)
     this.touchScene()
@@ -1841,11 +1842,11 @@ export class EditorState {
   }
 
   reloadResourceFile(path: string): void {
-    if ((path.endsWith('.tres') || path.endsWith('.tsl')) && !readCached(path)) {
+    if ((isMeshFile(path) || path.endsWith('.tres') || path.endsWith('.tsl')) && !readCached(path)) {
       this.releaseResourcePath(path)
       return
     }
-    if (path.endsWith('.tres')) {
+    if (isMeshFile(path) || path.endsWith('.tres')) {
       const file = readMeshFile(path)
       const resource = [...this.geometries.values()].find((item) => item.path === path)
       if (!file || !resource) return
@@ -2533,7 +2534,7 @@ export class EditorState {
         name: looseName,
         type: snapshot.type,
         params: snapshot.params,
-        path: uniqueFilePath('res://meshes', fileStem(looseName), '.tres'),
+        path: uniqueFilePath('res://meshes', fileStem(looseName), '.json'),
       })
       return id
     }
@@ -3604,7 +3605,7 @@ export class EditorState {
       name: resourceName,
       type,
       params: paramsWithDefaults,
-      path: options?.path ?? uniqueFilePath('res://meshes', fileStem(resourceName), '.tres'),
+      path: options?.path ?? uniqueFilePath('res://meshes', fileStem(resourceName), '.json'),
       geometry: null,
       defaults: { type, params: { ...paramsWithDefaults } },
     }

@@ -19,18 +19,25 @@ import { EditorState, NODE_LABEL, NODE_TYPES, type EditorNode, type GridSettings
 import type { GroupScope } from '../groups'
 import { kindClass, kindIcon } from '../lib/format'
 import { COMPONENT_DRAG_PREFIX, INSTANCE_DRAG_PREFIX, type ComponentParameter } from '../behaviors'
-import { EditorHistory, sameScene, type HistoryRow, type SelectionBookmark } from '../history'
+import { EditorHistory, sameScene, type FileSnap, type HistoryRow, type SelectionBookmark } from '../history'
 import { hasSceneFile, normalizeScenePath, readSceneLibrary, sceneFileName, type SceneFile } from '../sceneFile'
 import {
+  adoptSettingsFromCache,
   duplicatePath,
   fileNameOf,
   hasEntry,
+  isMeshFile,
   joinRes,
   mkdirPath,
   movePath,
   parentPath,
+  projectDirectories,
+  projectPaths,
+  readCached,
   removePath,
+  restoreFileSnaps,
   SETTINGS_PATH,
+  writeText,
   snapshotTree,
   subscribe as subscribeProject,
   uniqueDirectory,
@@ -235,6 +242,14 @@ export const useEditorStore = defineStore('editor', () => {
   const projectTree = ref<FsEntry[]>(snapshotTree())
   const renamingFile = ref<string | null>(null)
   const expandedFiles = ref(directoryPaths(snapshotTree()))
+  const fileSelection = ref<string[]>([])
+  const focusDock = ref<'scene' | 'files'>('scene')
+  const jsonPath = ref<string | null>(null)
+  const jsonSource = ref('')
+  const jsonStatus = ref('')
+  const jsonStatusKey = ref(0)
+  const jsonSavedText = ref('')
+  let fileAnchor: string | null = null
   const inspectorFilter = ref('')
   const expanded = ref(new Set<string>())
   const collapsed = ref(new Set<string>())
@@ -670,6 +685,64 @@ export const useEditorStore = defineStore('editor', () => {
     touch(options?.material)
   }
 
+  function projectSnap(): { files: Map<string, string>, dirs: Set<string> } {
+    const fileMap = new Map<string, string>()
+    for (const path of projectPaths()) fileMap.set(path, readCached(path) ?? '')
+    return { files: fileMap, dirs: new Set(projectDirectories()) }
+  }
+
+  function snapAt(snap: { files: Map<string, string>, dirs: Set<string> }, path: string): FileSnap {
+    if (snap.files.has(path)) return { path, text: snap.files.get(path) ?? '' }
+    if (snap.dirs.has(path)) return { path, text: null, directory: true }
+    return { path, text: null }
+  }
+
+  function diffProject(
+    before: { files: Map<string, string>, dirs: Set<string> },
+    after: { files: Map<string, string>, dirs: Set<string> },
+  ): { filesBefore: FileSnap[], filesAfter: FileSnap[] } | null {
+    const paths = new Set<string>([...before.files.keys(), ...after.files.keys(), ...before.dirs, ...after.dirs])
+    const filesBefore: FileSnap[] = []
+    const filesAfter: FileSnap[] = []
+    for (const path of paths) {
+      const left = snapAt(before, path)
+      const right = snapAt(after, path)
+      if (left.text === right.text && left.directory === right.directory) continue
+      filesBefore.push(left)
+      filesAfter.push(right)
+    }
+    return filesBefore.length > 0 ? { filesBefore, filesAfter } : null
+  }
+
+  /** Scene history step that also restores project files. */
+  function recordFiles(label: string, mutate: () => void): void {
+    if (replaying) {
+      mutate()
+      refreshProjectTree()
+      return
+    }
+    const before = takeSnapshot()
+    const beforeFiles = projectSnap()
+    const beforeSelection = bookmark()
+    mutate()
+    const after = takeSnapshot()
+    const files = before ? diffProject(beforeFiles, projectSnap()) : null
+    if (before && after && (files || !sameScene(before, after))) {
+      history.push({
+        label,
+        before,
+        after,
+        beforeSelection,
+        afterSelection: bookmark(),
+        filesBefore: files?.filesBefore,
+        filesAfter: files?.filesAfter,
+        at: Date.now(),
+      }, false)
+      historyTick.value += 1
+    }
+    refreshProjectTree()
+  }
+
   function gestureLabel(): string {
     const roots = engine.selectionRoots(engine.selectedIds)
     const name = roots.length > 1 ? `${roots.length} nodes` : nodeLabel(roots[0] ?? engine.selectedId)
@@ -725,6 +798,7 @@ export const useEditorStore = defineStore('editor', () => {
     if (!entry) return
     replaying = true
     try {
+      if (entry.filesBefore) restoreFileSnaps(entry.filesBefore)
       engine.restoreHistory(entry.before)
       applyBookmark(entry.beforeSelection)
       rememberExpanded()
@@ -732,6 +806,7 @@ export const useEditorStore = defineStore('editor', () => {
       replaying = false
     }
     historyTick.value += 1
+    refreshProjectTree()
     touch(true)
   }
 
@@ -741,6 +816,7 @@ export const useEditorStore = defineStore('editor', () => {
     if (!entry) return
     replaying = true
     try {
+      if (entry.filesAfter) restoreFileSnaps(entry.filesAfter)
       engine.restoreHistory(entry.after)
       applyBookmark(entry.afterSelection)
       rememberExpanded()
@@ -748,6 +824,7 @@ export const useEditorStore = defineStore('editor', () => {
       replaying = false
     }
     historyTick.value += 1
+    refreshProjectTree()
     touch(true)
   }
 
@@ -811,8 +888,15 @@ export const useEditorStore = defineStore('editor', () => {
     return node.childIds.some((childId) => nodeMatches(childId, query))
   }
 
+  function closeJsonEditor(): void {
+    jsonPath.value = null
+    jsonStatus.value = ''
+  }
+
   function select(id: string | null): void {
     selectedComponentId.value = null
+    focusDock.value = 'scene'
+    closeJsonEditor()
     engine.select(id)
     touch()
   }
@@ -820,6 +904,8 @@ export const useEditorStore = defineStore('editor', () => {
   function selectPicked(id: string | null, shift: boolean, ctrl: boolean): void {
     if ((shift || ctrl) && !id) return
     selectedComponentId.value = null
+    focusDock.value = 'scene'
+    closeJsonEditor()
     keepAnchor = Boolean(shift && id)
     try {
       if (ctrl && id) engine.toggleSelected(id)
@@ -833,6 +919,8 @@ export const useEditorStore = defineStore('editor', () => {
 
   function selectBoxed(ids: string[], shift: boolean, ctrl: boolean): void {
     selectedComponentId.value = null
+    focusDock.value = 'scene'
+    closeJsonEditor()
     keepAnchor = shift
     try {
       if (ctrl && shift) engine.toggleEach(ids)
@@ -873,6 +961,8 @@ export const useEditorStore = defineStore('editor', () => {
 
   function selectFromTree(id: string, shift: boolean, ctrl: boolean): void {
     selectedComponentId.value = null
+    focusDock.value = 'scene'
+    closeJsonEditor()
     const order = visibleNodeIds()
     const from = anchorId ? order.indexOf(anchorId) : -1
     const to = order.indexOf(id)
@@ -1776,9 +1866,10 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   function deleteSceneFile(path: string): void {
-    const removed = engine.deleteScene(path)
-    touch()
-    if (!removed) bottomTab.value = 'output'
+    recordFiles(`Delete ${fileNameOf(path)}`, () => {
+      const removed = engine.deleteScene(path)
+      if (!removed) bottomTab.value = 'output'
+    })
   }
 
   function openInstanceDialog(): void {
@@ -1939,6 +2030,11 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   function finishDeleteComponent(resourceId: string): void {
+    const name = engine.components.get(resourceId)?.name ?? 'component'
+    recordFiles(`Delete ${name}`, () => finishDeleteComponentNow(resourceId))
+  }
+
+  function finishDeleteComponentNow(resourceId: string): void {
     engine.deleteComponent(resourceId)
     dropScriptDraft(resourceId)
     openScriptIds.value = openScriptIds.value.filter((id) => id !== resourceId)
@@ -2946,10 +3042,12 @@ export const useEditorStore = defineStore('editor', () => {
       openComponentDialog()
     } else if ((event.ctrlKey || event.metaKey) && key === 'd') {
       event.preventDefault()
-      duplicateSelection()
+      if (focusDock.value === 'files' && fileSelection.value.length > 0) duplicateFileSelection()
+      else duplicateSelection()
     } else if (event.key === 'Delete' || event.key === 'Backspace') {
       event.preventDefault()
-      if (selectedComponentId.value) removeComponent(selectedComponentId.value)
+      if (focusDock.value === 'files' && fileSelection.value.length > 0) deleteFileSelection()
+      else if (selectedComponentId.value) removeComponent(selectedComponentId.value)
       else deleteSelection()
     } else if (event.key === 'F2') {
       const id = engine.selectedId
@@ -2985,11 +3083,12 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   function createProjectFolder(parent = 'res://'): void {
-    const path = uniqueDirectory(parent, 'NewFolder')
-    mkdirPath(path)
-    expandedFiles.value = new Set(expandedFiles.value).add(parent === 'res://' ? path : parent)
-    renamingFile.value = path
-    refreshProjectTree()
+    recordFiles('New Folder', () => {
+      const path = uniqueDirectory(parent, 'NewFolder')
+      mkdirPath(path)
+      expandedFiles.value = new Set(expandedFiles.value).add(parent === 'res://' ? path : parent)
+      renamingFile.value = path
+    })
   }
 
   function toggleProjectFolder(path: string): void {
@@ -3025,16 +3124,17 @@ export const useEditorStore = defineStore('editor', () => {
       touch()
       return
     }
-    movePath(from, next)
-    engine.retargetProjectPath(from, next)
-    refreshProjectTree()
+    recordFiles(`Rename ${fileNameOf(from)}`, () => {
+      movePath(from, next)
+      engine.retargetProjectPath(from, next)
+    })
   }
 
   function duplicateProjectPath(path: string): void {
-    const next = duplicatePath(path)
-    if (!next) return
-    if (next.endsWith('.ts')) engine.syncComponentFile(next)
-    refreshProjectTree()
+    recordFiles(`Duplicate ${fileNameOf(path)}`, () => {
+      const next = duplicatePath(path)
+      if (next?.endsWith('.ts')) engine.syncComponentFile(next)
+    })
   }
 
   function deleteProjectPath(path: string): void {
@@ -3060,9 +3160,10 @@ export const useEditorStore = defineStore('editor', () => {
         return
       }
     }
-    engine.releaseResourcePath(path)
-    removePath(path)
-    refreshProjectTree()
+    recordFiles(`Delete ${fileNameOf(path)}`, () => {
+      engine.releaseResourcePath(path)
+      removePath(path)
+    })
   }
 
   function moveProjectEntry(from: string, folder: string): void {
@@ -3074,11 +3175,161 @@ export const useEditorStore = defineStore('editor', () => {
       touch()
       return
     }
-    movePath(from, next)
-    engine.retargetProjectPath(from, next)
-    expandedFiles.value = new Set(expandedFiles.value).add(folder)
-    refreshProjectTree()
+    recordFiles(`Move ${fileNameOf(from)}`, () => {
+      movePath(from, next)
+      engine.retargetProjectPath(from, next)
+      expandedFiles.value = new Set(expandedFiles.value).add(folder)
+    })
   }
+
+  function fileRowVisible(entry: FsEntry, query: string): boolean {
+    if (!query) return true
+    if (entry.path.toLowerCase().includes(query) || entry.name.toLowerCase().includes(query)) return true
+    return entry.children.some((child) => fileRowVisible(child, query))
+  }
+
+  function visibleFilePaths(): string[] {
+    const query = fileFilter.value.trim().toLowerCase()
+    const paths: string[] = []
+    const walk = (entries: FsEntry[]): void => {
+      for (const entry of entries) {
+        if (!fileRowVisible(entry, query)) continue
+        paths.push(entry.path)
+        if (entry.kind === 'dir' && (query.length > 0 || expandedFiles.value.has(entry.path))) walk(entry.children)
+      }
+    }
+    walk(projectTree.value)
+    return paths
+  }
+
+  function activateProjectPath(path: string): void {
+    if (path.endsWith('.tscn')) openSceneFile(path)
+    else if (path.endsWith('.json')) openJsonFile(path)
+    else if (path.endsWith('.tsl')) selectMaterialPath(path)
+    else     if (path.endsWith('.ts')) {
+      const component = componentFiles.value.find((file) => file.path === path)
+      if (component) openComponentDialog(component.id)
+    }
+  }
+
+  function selectProjectPath(path: string, shift: boolean, ctrl: boolean): void {
+    focusDock.value = 'files'
+    const order = visibleFilePaths()
+    const from = fileAnchor ? order.indexOf(fileAnchor) : -1
+    const to = order.indexOf(path)
+    const ranged = shift && from >= 0 && to >= 0
+    if (ranged) {
+      const start = Math.min(from, to)
+      const end = Math.max(from, to)
+      const range = order.slice(start, end + 1)
+      fileSelection.value = ctrl ? [...new Set([...fileSelection.value, ...range])] : range
+      return
+    }
+    if (ctrl) {
+      fileSelection.value = fileSelection.value.includes(path)
+        ? fileSelection.value.filter((item) => item !== path)
+        : [...fileSelection.value, path]
+      fileAnchor = path
+      return
+    }
+    fileSelection.value = [path]
+    fileAnchor = path
+    activateProjectPath(path)
+  }
+
+  function deleteFileSelection(): void {
+    const paths = fileSelection.value.filter((path) => findProjectEntry(projectTree.value, path))
+    if (paths.length === 0) return
+    const label = paths.length === 1 ? `Delete ${fileNameOf(paths[0]!)}` : `Delete ${paths.length} files`
+    const deferred: string[] = []
+    recordFiles(label, () => {
+      for (const path of paths) {
+        if (path.endsWith('.ts')) {
+          const resource = [...engine.components.values()].find((item) => item.path === path)
+          if (resource && engine.usesOf(resource.id).length > 0) {
+            deferred.push(resource.id)
+            continue
+          }
+        }
+        deleteProjectPathNow(path)
+      }
+    })
+    fileSelection.value = []
+    for (const id of deferred) requestDeleteComponent(id)
+  }
+
+  function deleteProjectPathNow(path: string): void {
+    if (path === SETTINGS_PATH) {
+      engine.log('settings.json stays in the project.', 'warn')
+      return
+    }
+    if (path === engine.scenePath || engine.scenePath.startsWith(`${path}/`)) {
+      engine.log('The open scene stays in the File system.', 'warn')
+      return
+    }
+    if (path.endsWith('.tscn')) {
+      const removed = engine.deleteScene(path)
+      if (!removed) bottomTab.value = 'output'
+      return
+    }
+    if (path.endsWith('.ts')) {
+      const resource = [...engine.components.values()].find((item) => item.path === path)
+      if (resource) {
+        finishDeleteComponentNow(resource.id)
+        return
+      }
+    }
+    engine.releaseResourcePath(path)
+    removePath(path)
+  }
+
+  function duplicateFileSelection(): void {
+    const paths = fileSelection.value.filter((path) => findProjectEntry(projectTree.value, path)?.kind === 'file')
+    if (paths.length === 0) return
+    const label = paths.length === 1 ? `Duplicate ${fileNameOf(paths[0]!)}` : `Duplicate ${paths.length} files`
+    recordFiles(label, () => {
+      for (const path of paths) {
+        const next = duplicatePath(path)
+        if (next?.endsWith('.ts')) engine.syncComponentFile(next)
+      }
+    })
+  }
+
+  function openJsonFile(path: string): void {
+    const text = readCached(path) ?? ''
+    jsonPath.value = path
+    jsonSource.value = text
+    jsonSavedText.value = text
+    jsonStatus.value = ''
+    focusDock.value = 'files'
+  }
+
+  function onJsonChange(value: string): void {
+    jsonSource.value = value
+    if (jsonStatus.value) jsonStatus.value = ''
+  }
+
+  function saveJsonFile(): void {
+    const path = jsonPath.value
+    if (!path) return
+    try {
+      JSON.parse(jsonSource.value)
+    } catch (error) {
+      jsonStatus.value = error instanceof Error ? error.message : 'Invalid JSON.'
+      jsonStatusKey.value += 1
+      return
+    }
+    const text = jsonSource.value.endsWith('\n') ? jsonSource.value : `${jsonSource.value}\n`
+    writeText(path, text)
+    if (path === SETTINGS_PATH) adoptSettingsFromCache()
+    if (isMeshFile(path)) engine.reloadResourceFile(path)
+    jsonSavedText.value = readCached(path) ?? text
+    jsonSource.value = jsonSavedText.value
+    jsonStatus.value = 'Applied'
+    jsonStatusKey.value += 1
+  }
+
+  const jsonDirty = computed(() => jsonPath.value !== null && jsonSource.value !== jsonSavedText.value)
 
   function openProjectMenu(path: string, x: number, y: number): void {
     const entry = findProjectEntry(projectTree.value, path)
@@ -3088,8 +3339,13 @@ export const useEditorStore = defineStore('editor', () => {
     }
     if (entry) {
       items.push({ label: 'Rename', action: () => beginFileRename(path) })
-      items.push({ label: 'Duplicate', disabled: entry.kind === 'dir', action: () => duplicateProjectPath(path) })
-      items.push({ label: 'Delete', action: () => deleteProjectPath(path) })
+      const group = fileSelection.value.includes(path) && fileSelection.value.length > 1
+      items.push({
+        label: 'Duplicate',
+        disabled: entry.kind === 'dir' && !group,
+        action: () => group ? duplicateFileSelection() : duplicateProjectPath(path),
+      })
+      items.push({ label: 'Delete', action: () => group ? deleteFileSelection() : deleteProjectPath(path) })
     }
     showPopup(new DOMRect(x, y, 0, 0), items, false)
   }
@@ -3098,7 +3354,7 @@ export const useEditorStore = defineStore('editor', () => {
     projectTree.value = snapshotTree()
     for (const path of changed) {
       if (path.endsWith('.ts')) engine.syncComponentFile(path)
-      else if (path.endsWith('.tres') || path.endsWith('.tsl')) {
+      else if (isMeshFile(path) || path.endsWith('.tres') || path.endsWith('.tsl')) {
         if (!engine.sceneDirty) engine.reloadResourceFile(path)
       } else if (path === engine.scenePath && !engine.sceneDirty) engine.loadOpenScene()
     }
@@ -3142,6 +3398,12 @@ export const useEditorStore = defineStore('editor', () => {
     projectTree,
     renamingFile,
     expandedFiles,
+    fileSelection,
+    jsonPath,
+    jsonSource,
+    jsonStatus,
+    jsonStatusKey,
+    jsonDirty,
     inspectorFilter,
     expanded,
     collapsed,
@@ -3338,6 +3600,10 @@ export const useEditorStore = defineStore('editor', () => {
     selectGeometryPath,
     assignMeshFile,
     assignMaterialFile,
+    selectProjectPath,
+    openJsonFile,
+    onJsonChange,
+    saveJsonFile,
     openInstanceDialog,
     instanceScene,
     makeLocal,

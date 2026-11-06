@@ -218,7 +218,7 @@ export function externalizeScene(file: SceneFile): SceneFile {
   for (const record of file.geometries) {
     const path = record.path?.startsWith('res://')
       ? record.path
-      : uniqueFilePath('res://meshes', fileStem(record.name), '.tres')
+      : uniqueFilePath('res://meshes', fileStem(record.name), '.json')
     geoPaths.set(record.id, path)
     writeMeshFile(path, {
       version: 1,

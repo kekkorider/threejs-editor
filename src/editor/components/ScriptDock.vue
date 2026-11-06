@@ -69,7 +69,27 @@ function onDrop(event: DragEvent): void {
     @drop.prevent="onDrop"
   >
     <div class="dock-title">Script</div>
-    <template v-if="node">
+    <div v-if="store.jsonPath" class="script-main dock-script json-script">
+      <div class="tsl-bar">
+        <span class="name" :title="store.jsonPath">{{ store.jsonPath.slice(store.jsonPath.lastIndexOf('/') + 1) }}</span>
+        <span class="spacer" />
+        <span
+          v-if="store.jsonStatus"
+          :key="store.jsonStatusKey"
+          class="status"
+          :title="store.jsonStatus"
+          :class="{ error: store.jsonStatus !== 'Applied', ok: store.jsonStatus === 'Applied', fade: store.jsonStatus === 'Applied' }"
+        >{{ store.jsonStatus }}</span>
+        <button type="button" class="btn" :disabled="!store.jsonDirty" @click="store.saveJsonFile()">Apply</button>
+      </div>
+      <CodeEditor
+        :key="store.jsonPath"
+        v-model="store.jsonSource"
+        language="json"
+        @change="store.onJsonChange"
+      />
+    </div>
+    <template v-else-if="node">
       <div class="script-picker">
         <span class="slot-label">Script</span>
         <button

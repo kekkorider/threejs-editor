@@ -124,6 +124,21 @@ export function projectPaths(): string[] {
   return [...files.keys()]
 }
 
+export function projectDirectories(): string[] {
+  return [...directories]
+}
+
+/** Mesh resource. The File system shows the name without `.json`. */
+export function isMeshFile(path: string): boolean {
+  return path.startsWith('res://meshes/') && path.endsWith('.json')
+}
+
+export function adoptSettingsFromCache(): void {
+  const text = files.get(SETTINGS_PATH)
+  if (!text) return
+  settings = parseSettings(text)
+}
+
 export function snapshotTree(): FsEntry[] {
   return structuredClone(tree)
 }
@@ -318,14 +333,34 @@ export function readMaterialFile(path: string): MaterialFile | null {
   }
 }
 
+/** Put each path back to the text it had. Null text removes the path. */
+export function restoreFileSnaps(snaps: readonly { path: string, text: string | null, directory?: boolean }[]): void {
+  for (const snap of snaps) {
+    if (snap.text === null && !snap.directory) removePath(snap.path)
+  }
+  for (const snap of snaps) {
+    if (snap.directory) mkdirPath(snap.path)
+    else if (snap.text !== null) writeText(snap.path, snap.text, true)
+  }
+}
+
 export function retarget(path: string, from: string, to: string): string {
   if (path === from) return to
   if (path.startsWith(`${from}/`)) return `${to}${path.slice(from.length)}`
   return path
 }
 
+function migrateTresMeshes(): void {
+  const legacy = [...files.keys()].filter((path) => path.startsWith('res://meshes/') && path.endsWith('.tres'))
+  for (const path of legacy) {
+    const next = `${path.slice(0, -'.tres'.length)}.json`
+    if (path !== next && !files.has(next) && !directories.has(next)) movePath(path, next)
+  }
+}
+
 async function boot(): Promise<void> {
   await pullAll()
+  migrateTresMeshes()
   const hadSettings = files.has(SETTINGS_PATH)
   const seed = await import('./projectSeed')
   const legacy = seed.takeLegacy()

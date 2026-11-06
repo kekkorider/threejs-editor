@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
-import { highlightTypeScript } from '../highlight'
+import { highlightJson, highlightTypeScript } from '../highlight'
 import { highlightTSL } from '../tsl'
 
 const model = defineModel<string>({ required: true })
-const props = defineProps<{ disabled?: boolean, language?: 'tsl' | 'typescript' }>()
+const props = defineProps<{ disabled?: boolean, language?: 'tsl' | 'typescript' | 'json' }>()
 const emit = defineEmits<{ change: [value: string] }>()
 
 const textarea = ref<HTMLTextAreaElement | null>(null)
@@ -14,6 +14,7 @@ const gutter = ref<HTMLElement | null>(null)
 const html = computed(() => {
   const value = model.value
   const source = value.endsWith('\n') || value.length === 0 ? `${value} ` : value
+  if (props.language === 'json') return highlightJson(source)
   return props.language === 'typescript' ? highlightTypeScript(source) : highlightTSL(source)
 })
 
@@ -78,7 +79,7 @@ function onKeydown(event: KeyboardEvent): void {
         autocomplete="off"
         autocapitalize="off"
         wrap="off"
-        :aria-label="language === 'typescript' ? 'TypeScript source' : 'TSL material source'"
+        :aria-label="language === 'json' ? 'JSON source' : language === 'typescript' ? 'TypeScript source' : 'TSL material source'"
         :value="model"
         :disabled="disabled"
         @input="onInput"

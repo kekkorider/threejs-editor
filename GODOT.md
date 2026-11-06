@@ -48,7 +48,7 @@ When a feature lands, move it from **Not yet** into **Already in place**. Do not
 - Property filter.
 - Transform. New meshes start at position `[0, 0, 0]`, rotation `[0, 0, 0]`, scale `[1, 1, 1]`.
 - Geometry type and parameters, including shared geometry.
-- Mesh and Geometry groups on a mesh. Mesh has a resource slot for a `.tres` file, plus the geometry type and parameters. Geometry has a Material Override slot for a `.tsl` file, plus the material name, TSL preset, cull mode, transparency, wireframe, and Cast Shadow. Drag a file from the File system onto the slot to assign it. The slot shows `[empty]` when nothing is assigned. Click the slot for New, Make Unique, Clear, and the other files of that type.
+- Mesh and Geometry groups on a mesh. Mesh has a resource slot for a mesh JSON file, plus the geometry type and parameters. Geometry has a Material Override slot for a `.tsl` file, plus the material name, TSL preset, cull mode, transparency, wireframe, and Cast Shadow. Drag a file from the File system onto the slot to assign it. The slot shows `[empty]` when nothing is assigned. Click the slot for New, Make Unique, Clear, and the other files of that type.
 - Projection holds the camera frustum. Camera holds Current, Preview, Sync Viewport, and Layers. View Offset stays its own group.
 - Light holds color, energy, ground, and Look at. Omni holds Range. Spot holds Range, Angle, and Penumbra.
 - Light color, energy, range, spot angle, penumbra, and Look at for directional and spot lights.
@@ -70,7 +70,7 @@ When a feature lands, move it from **Not yet** into **Already in place**. Do not
 - The File system dock shows that folder as a tree. A row shows the file name. The tooltip shows the `res://` path.
 - New Folder, Rename, Duplicate, and Delete work from the dock. Drag a file or folder onto a folder to move it. The open scene cannot be deleted. `settings.json` cannot be deleted.
 - A change in the folder updates the dock. An external change does not reload a scene that still shows `(*)`.
-- A scene is a `*.tscn` file. A mesh is `meshes/*.tres`. A material is `materials/*.tsl`. A component is `components/*.ts`. The scene stores the mesh and material paths and does not embed those resources. Save Scene writes the files. Create, Make Unique, rename, and delete write the file at once. Apply writes the component file at once.
+- A scene is a `*.tscn` file. A mesh is `meshes/Name.json`. The File system row shows `Name`. A material is `materials/*.tsl`. A component is `components/*.ts`. The scene stores the mesh and material paths and does not embed those resources. Save Scene writes the files. Create, Make Unique, rename, and delete write the file at once. Apply writes the component file at once. A click on a `.json` file opens it in the Script dock. Shift and Ctrl select file rows the same way they select scene nodes. Undo and redo include file create, rename, move, duplicate, and delete.
 - `res://settings.json` stores the open scene path, physics, the preview sun, the preview environment, and global groups. The editor creates it with the defaults when it is missing. Scenes and these settings are not stored in browser storage. If the folder has no scene and the browser still has older saved scenes, the editor copies those scenes into the folder once.
 
 ### Resources

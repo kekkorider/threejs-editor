@@ -6,7 +6,7 @@ export default { name: 'FileTreeNode' }
 import { computed, ref } from 'vue'
 import { COMPONENT_DRAG_PREFIX, markScriptDrag } from '../behaviors'
 import { writeSceneDrag } from '../sceneFile'
-import { PROJECT_DRAG_TYPE, RESOURCE_DRAG_TYPE, type FsEntry } from '../projectFs'
+import { isMeshFile, PROJECT_DRAG_TYPE, RESOURCE_DRAG_TYPE, type FsEntry } from '../projectFs'
 import Icon from './Icon.vue'
 import { useEditorStore } from '../stores/editor'
 
@@ -27,7 +27,7 @@ function matches(entry: FsEntry, query: string): boolean {
 function iconName(entry: FsEntry): string {
   if (entry.kind === 'dir') return 'folder'
   if (entry.path.endsWith('.tscn')) return 'scene'
-  if (entry.path.endsWith('.tres')) return 'meshfile'
+  if (isMeshFile(entry.path)) return 'meshfile'
   if (entry.path.endsWith('.tsl')) return 'material'
   if (entry.path.endsWith('.ts')) return 'component'
   return 'script'
@@ -36,10 +36,15 @@ function iconName(entry: FsEntry): string {
 function iconClass(entry: FsEntry): string {
   if (entry.kind === 'dir') return 'folder'
   if (entry.path.endsWith('.tscn')) return 'scene'
-  if (entry.path.endsWith('.tres')) return 'mesh'
+  if (isMeshFile(entry.path)) return 'mesh'
   if (entry.path.endsWith('.tsl')) return 'mat'
   if (entry.path.endsWith('.ts')) return 'component'
   return 'script'
+}
+
+function displayName(entry: FsEntry): string {
+  if (isMeshFile(entry.path) && entry.name.endsWith('.json')) return entry.name.slice(0, -'.json'.length)
+  return entry.name
 }
 
 function onDrag(event: DragEvent): void {
@@ -47,7 +52,7 @@ function onDrag(event: DragEvent): void {
   suppressClick = true
   event.dataTransfer.effectAllowed = 'copyMove'
   event.dataTransfer.setData(PROJECT_DRAG_TYPE, props.entry.path)
-  if (props.entry.path.endsWith('.tres') || props.entry.path.endsWith('.tsl')) {
+  if (isMeshFile(props.entry.path) || props.entry.path.endsWith('.tsl')) {
     event.dataTransfer.setData(RESOURCE_DRAG_TYPE, props.entry.path)
   }
   if (props.entry.path.endsWith('.tscn') && props.entry.path !== store.scenePath) {
@@ -58,22 +63,12 @@ function onDrag(event: DragEvent): void {
   event.dataTransfer.setData(PROJECT_DRAG_TYPE, props.entry.path)
 }
 
-function onClick(): void {
+function onClick(event: MouseEvent): void {
   if (suppressClick) {
     suppressClick = false
     return
   }
-  if (props.entry.kind === 'dir') {
-    store.toggleProjectFolder(props.entry.path)
-    return
-  }
-  if (props.entry.path.endsWith('.tscn')) store.openSceneFile(props.entry.path)
-  else if (props.entry.path.endsWith('.tsl')) store.selectMaterialPath(props.entry.path)
-  else if (props.entry.path.endsWith('.tres')) store.selectGeometryPath(props.entry.path)
-  else if (props.entry.path.endsWith('.ts')) {
-    const component = store.componentFiles.find((file) => file.path === props.entry.path)
-    if (component) store.openComponentDialog(component.id)
-  }
+  store.selectProjectPath(props.entry.path, event.shiftKey, event.ctrlKey || event.metaKey)
 }
 
 function onFolderOver(event: DragEvent): void {
@@ -103,11 +98,11 @@ function commitRename(event: Event): void {
   <div v-if="visible">
     <div
       class="file-row"
-      :class="{ selected: entry.path === store.scenePath, 'drop-target': over }"
+      :class="{ selected: store.fileSelection.includes(entry.path), 'drop-target': over }"
       :style="{ paddingLeft: `${8 + depth * 14}px` }"
       :title="entry.path"
       draggable="true"
-      @click.stop="onClick"
+      @click.stop="onClick($event)"
       @contextmenu.prevent.stop="store.openProjectMenu(entry.path, $event.clientX, $event.clientY)"
       @dragstart.stop="onDrag"
       @dragover="onFolderOver"
@@ -128,13 +123,13 @@ function commitRename(event: Event): void {
       <input
         v-if="store.renamingFile === entry.path"
         class="rename-input"
-        :value="entry.name"
+        :value="displayName(entry)"
         autofocus
         @click.stop
         @keydown.enter.prevent="commitRename"
         @blur="commitRename"
       />
-      <span v-else class="label">{{ entry.name }}{{ entry.path === store.scenePath && store.sceneDirty ? ' (*)' : '' }}</span>
+      <span v-else class="label">{{ displayName(entry) }}{{ entry.path === store.scenePath && store.sceneDirty ? ' (*)' : '' }}</span>
     </div>
     <template v-if="entry.kind === 'dir' && open">
       <FileTreeNode

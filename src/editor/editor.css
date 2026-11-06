@@ -735,6 +735,7 @@
 .resource-btn.dragover { border-color: #7aa2ff; }
 .resource-btn.empty { color: var(--font-mute); }
 .file-row .twist {
+  all: unset;
   width: 16px;
   height: 16px;
   display: grid;

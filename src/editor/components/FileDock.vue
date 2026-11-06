@@ -24,8 +24,14 @@ function onRootOver(event: DragEvent): void {
 
 <template>
   <section class="dock files-dock">
-    <div class="dock-title">
-      <span>File system</span>
+    <div class="dock-title">File system</div>
+    <div class="dock-tools">
+      <button type="button" class="icon-btn" :title="store.undoTitle" :disabled="!store.canUndo" @click="store.undo()">
+        <Icon name="back" />
+      </button>
+      <button type="button" class="icon-btn" :title="store.redoTitle" :disabled="!store.canRedo" @click="store.redo()">
+        <Icon name="forward" />
+      </button>
       <button type="button" class="icon-btn" title="New Folder" @click="store.createProjectFolder('res://')">
         <Icon name="folder" />
       </button>
