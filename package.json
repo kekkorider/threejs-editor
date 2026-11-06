@@ -1,14 +1,31 @@
 {
-  "name": "threejs-starter",
-  "private": true,
+  "name": "@kekkorider/threejs-editor",
   "version": "2.0.1",
+  "license": "MIT",
   "type": "module",
+  "sideEffects": true,
   "engines": {
     "node": "24"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "types"
+  ],
+  "types": "./types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "import": "./dist/index.js"
+    }
   },
   "scripts": {
     "dev": "pnpm copy-draco && pnpm copy-basis && vite",
     "build": "pnpm copy-draco && pnpm copy-basis && tsc && vite build",
+    "build:lib": "vite build --config vite.lib.config.ts",
+    "prepack": "pnpm build:lib",
     "preview": "vite preview",
     "copy-draco": "node scripts/copyDracoFiles.js",
     "copy-basis": "node scripts/copyBasisLib.js"
@@ -17,7 +34,8 @@
     "@types/three": "^0.186.0",
     "@vitejs/plugin-vue": "^6.0.10",
     "typescript": "~7.0.2",
-    "vite": "^8.3.3"
+    "vite": "^8.3.3",
+    "vue-router": "^5.4.0"
   },
   "dependencies": {
     "crashcat": "^0.0.5",
@@ -27,7 +45,6 @@
     "sucrase": "^3.35.1",
     "three": "^0.186.1",
     "three-start": "^0.3.1",
-    "vue": "^3.5.44",
-    "vue-router": "^5.4.0"
+    "vue": "^3.5.44"
   }
 }
