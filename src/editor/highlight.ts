@@ -94,3 +94,49 @@ export function highlightTypeScript(source: string): string {
 
   return html
 }
+
+/** Token colors for JSON. Strings, numbers, and the three literals stay intact. */
+export function highlightJson(source: string): string {
+  let html = ''
+  let index = 0
+  while (index < source.length) {
+    const char = source[index]!
+    if (char === '"') {
+      let end = index + 1
+      while (end < source.length) {
+        if (source[end] === '\\') {
+          end += 2
+          continue
+        }
+        if (source[end] === '"') {
+          end += 1
+          break
+        }
+        end += 1
+      }
+      html += `<span class="tok-s">${escapeHtml(source.slice(index, end))}</span>`
+      index = end
+      continue
+    }
+    if (/[0-9-]/.test(char)) {
+      const match = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(source.slice(index))
+      if (match?.[0]) {
+        html += `<span class="tok-n">${match[0]}</span>`
+        index += match[0].length
+        continue
+      }
+    }
+    if (/[a-z]/.test(char)) {
+      const match = /^[a-z]+/.exec(source.slice(index))
+      const word = match?.[0] ?? char
+      html += word === 'true' || word === 'false' || word === 'null'
+        ? `<span class="tok-k">${word}</span>`
+        : escapeHtml(word)
+      index += word.length
+      continue
+    }
+    html += escapeHtml(char)
+    index += 1
+  }
+  return html
+}

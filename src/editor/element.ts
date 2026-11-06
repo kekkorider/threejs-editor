@@ -1,6 +1,7 @@
 import { createApp, type App } from 'vue'
 import { createPinia } from 'pinia'
 import EditorPage from './pages/EditorPage.vue'
+import { ensureProject } from './projectFs'
 import './element.css'
 
 /**
@@ -10,6 +11,7 @@ import './element.css'
 export class ThreejsEditor extends HTMLElement {
   private app: App<Element> | null = null
   private root: HTMLDivElement | null = null
+  private mounting = false
 
   connectedCallback(): void {
     if (!document.body) {
@@ -22,7 +24,18 @@ export class ThreejsEditor extends HTMLElement {
       document.body.append(this)
       return
     }
+    if (this.app || this.mounting) return
+    this.mounting = true
+    void this.mountEditor()
+  }
+
+  private async mountEditor(): Promise<void> {
     if (this.app) return
+    try {
+      await ensureProject()
+    } catch (error) {
+      console.error(error)
+    }
 
     const root = document.createElement('div')
     root.className = 'threejs-editor-root'
@@ -39,6 +52,7 @@ export class ThreejsEditor extends HTMLElement {
     if (this.isConnected) return
     this.app?.unmount()
     this.app = null
+    this.mounting = false
     this.root?.remove()
     this.root = null
   }

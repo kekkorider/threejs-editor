@@ -6,12 +6,23 @@ export interface SelectionBookmark {
   componentIndex: number | null
 }
 
+/** One path in a file-system step. `text` null means the path is absent. */
+export interface FileSnap {
+  path: string
+  text: string | null
+  /** Empty directory. `text` stays null. */
+  directory?: boolean
+}
+
 export interface HistoryEntry {
   label: string
   before: SceneFile
   after: SceneFile
   beforeSelection: SelectionBookmark
   afterSelection: SelectionBookmark
+  /** Present when the step created, changed, or removed project files. */
+  filesBefore?: FileSnap[]
+  filesAfter?: FileSnap[]
   at: number
 }
 
@@ -69,6 +80,7 @@ export class EditorHistory {
     ) {
       last.after = entry.after
       last.afterSelection = entry.afterSelection
+      last.filesAfter = entry.filesAfter
       last.at = entry.at
       this.future = []
       return

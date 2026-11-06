@@ -65,15 +65,6 @@ function resetField(field: 'color' | 'ground' | 'intensity' | 'range' | 'angle' 
     <PropRow v-if="light.ground !== null" label="Ground" :reset="() => resetField('ground')">
       <input type="color" :value="light.ground" @input="store.setLightColor(node.id, ($event.target as HTMLInputElement).value, 'ground')" />
     </PropRow>
-    <PropRow v-if="light.range !== null" label="Range" :reset="() => resetField('range')">
-      <input type="number" min="0" max="200" step="0.1" :value="formatNumber(light.range)" @change="commit((value) => store.setLightRange(node!.id, value), $event)" />
-    </PropRow>
-    <PropRow v-if="light.angle !== null" label="Angle" :reset="() => resetField('angle')">
-      <input type="number" min="1" max="90" step="1" :value="formatNumber(light.angle)" @change="commit((value) => store.setSpotAngle(node!.id, value), $event)" />
-    </PropRow>
-    <PropRow v-if="light.penumbra !== null" label="Penumbra" :reset="() => resetField('penumbra')">
-      <input type="number" min="0" max="1" step="0.01" :value="formatNumber(light.penumbra)" @change="commit((value) => store.setSpotPenumbra(node!.id, value), $event)" />
-    </PropRow>
     <PropRow v-if="light.lookAt" label="Look at" :reset="resetEnabled">
       <label class="check">
         <input type="checkbox" :checked="light.lookAt.enabled" @change="store.setLookAtEnabled(node.id, ($event.target as HTMLInputElement).checked)" />
@@ -96,5 +87,21 @@ function resetField(field: 'color' | 'ground' | 'intensity' | 'range' | 'angle' 
     </PropRow>
     <div v-if="light.lookAt && !light.lookAt.enabled" class="hint">Look at is off. Rotate the node to aim it.</div>
     <div v-else-if="light.lookAt?.enabled" class="hint">The light aims at the target point.</div>
+  </Section>
+  <Section v-if="node && light && light.range !== null && light.angle === null" title="Omni" section-key="omni">
+    <PropRow label="Range" :reset="() => resetField('range')">
+      <input type="number" min="0" max="200" step="0.1" :value="formatNumber(light.range)" @change="commit((value) => store.setLightRange(node!.id, value), $event)" />
+    </PropRow>
+  </Section>
+  <Section v-if="node && light && light.angle !== null" title="Spot" section-key="spot">
+    <PropRow label="Range" :reset="() => resetField('range')">
+      <input type="number" min="0" max="200" step="0.1" :value="formatNumber(light.range ?? 0)" @change="commit((value) => store.setLightRange(node!.id, value), $event)" />
+    </PropRow>
+    <PropRow label="Angle" :reset="() => resetField('angle')">
+      <input type="number" min="1" max="90" step="1" :value="formatNumber(light.angle)" @change="commit((value) => store.setSpotAngle(node!.id, value), $event)" />
+    </PropRow>
+    <PropRow label="Penumbra" :reset="() => resetField('penumbra')">
+      <input type="number" min="0" max="1" step="0.01" :value="formatNumber(light.penumbra ?? 0)" @change="commit((value) => store.setSpotPenumbra(node!.id, value), $event)" />
+    </PropRow>
   </Section>
 </template>

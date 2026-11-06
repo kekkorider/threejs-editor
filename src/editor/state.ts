@@ -1,8 +1,8 @@
 import * as THREE from 'three/webgpu'
 import { TransformControls } from 'three/addons/controls/TransformControls.js'
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
-import { ThreeContextEvents, addComponent, destroy, getComponents } from 'three-start'
-import type { Object3DBehaviour, Object3DBehaviourConstructor, ThreeStart } from 'three-start'
+import { Object3DBehaviour, ThreeContextEvents, addComponent, destroy, getComponents } from 'three-start'
+import type { Object3DBehaviourConstructor, ThreeStart } from 'three-start'
 import {
   BUILTIN_COMPONENTS,
   applyParameters,
@@ -38,6 +38,25 @@ import {
   type GeometryType,
 } from './geometry'
 import { fingerprint } from './history'
+import {
+  fileStem,
+  hasFile,
+  isMaterialFile,
+  isMeshFile,
+  movePath,
+  parentPath,
+  projectPaths,
+  projectReady,
+  readCached,
+  readMaterialFile,
+  readMeshFile,
+  removePath,
+  retarget,
+  uniqueFilePath,
+  writeMaterialFile,
+  writeMeshFile,
+  writeText,
+} from './projectFs'
 import {
   applyCameraSettings,
   copyCameraSettings,
@@ -197,6 +216,7 @@ export interface ComponentResource {
   id: string
   name: string
   source: string
+  path: string
   builtin: boolean
   ctor: Object3DBehaviourConstructor
   error: string | null
@@ -215,6 +235,7 @@ export interface GeometryResource {
   name: string
   type: GeometryType
   params: Record<string, number>
+  path: string
   geometry: THREE.BufferGeometry | null
   defaults: { type: GeometryType, params: Record<string, number> }
 }
@@ -226,6 +247,7 @@ export interface MaterialResource {
   side: MaterialSide
   transparent: boolean
   wireframe: boolean
+  path: string
   material: THREE.MeshStandardNodeMaterial | null
   error: string | null
   defaults: { name: string, source: string, side: MaterialSide, transparent: boolean, wireframe: boolean }
@@ -397,6 +419,7 @@ export class EditorState {
   /** eventemitter3 emitters and saved signal links. */
   private readonly signalBus = new SignalBus()
   private signalDepth = 0
+  private projectComponentsLoaded = false
 
   constructor() {
     bindSceneRuntime({
@@ -407,17 +430,7 @@ export class EditorState {
       disconnectSignal: (element, signal, listener) => this.disconnectFromCode(element, signal, listener),
       isSignalConnected: (element, signal, listener) => this.isSignalConnected(element, signal, listener),
     })
-    for (const builtin of BUILTIN_COMPONENTS) {
-      const id = `cmp${this.idCounter++}`
-      this.components.set(id, {
-        id,
-        name: builtin.name,
-        source: builtin.source,
-        builtin: true,
-        ctor: builtin.ctor,
-        error: null,
-      })
-    }
+    this.loadProjectComponents()
   }
 
   log(message: string, level: LogLine['level'] = 'info'): void {
@@ -430,6 +443,7 @@ export class EditorState {
   }
 
   attach(starter: ThreeStart): boolean {
+    this.loadProjectComponents()
     if (this.attached) {
       this.setChromeVisible(true)
       return false
@@ -565,7 +579,7 @@ export class EditorState {
     }
     const normalized = normalizeScenePath(path)
     if (!normalized) {
-      this.log('Use a scene path like res://Name.tscn.', 'warn')
+      this.log('Use a scene path like res://Name.json.', 'warn')
       return false
     }
     this.scenePath = normalized
@@ -636,7 +650,7 @@ export class EditorState {
     }
     const parent = this.parentOrSelected(parentId)
     const object = new THREE.Group()
-    object.name = this.uniqueName(sceneFileName(path).replace(/\.tscn$/, '') || 'Scene')
+    object.name = this.uniqueName(sceneFileName(path).replace(/\.json$/, '') || 'Scene')
     parent.object.add(object)
     const node = this.addNode(object, parent.id, 'Node3D', false, { silent: true })
     node.instancePath = path
@@ -1126,14 +1140,16 @@ export class EditorState {
 
   createMesh(options: CreateMeshOptions): EditorNode {
     const parent = this.parentOrSelected(options.parentId)
-    const geometryResource = this.createGeometryResource(options.geometryType, options.params)
-    const materialResource = this.createMaterialResource(options.materialName ?? 'TSLMaterial', options.source, options.flags)
+    const geometryResource = this.createGeometryResource(options.geometryType, options.params, undefined, { persist: true })
+    const materialResource = this.createMaterialResource(options.materialName ?? 'TSLMaterial', options.source, options.flags, { persist: true })
     const compiled = this.compileMaterial(materialResource.id)
     if (!compiled.ok || !materialResource.material || !geometryResource.geometry) {
       geometryResource.geometry?.dispose()
       materialResource.material?.dispose()
       this.geometries.delete(geometryResource.id)
       this.materials.delete(materialResource.id)
+      removePath(geometryResource.path)
+      removePath(materialResource.path)
       throw new Error(compiled.ok ? 'Material failed to compile.' : compiled.error)
     }
 
@@ -1340,14 +1356,17 @@ export class EditorState {
       if (this.componentNames().has(compiled.name)) {
         return { error: `A component named ${compiled.name} already exists.` }
       }
+      const source = withClassName(nextSource, compiled.name)
       const resource: ComponentResource = {
         id: `cmp${this.idCounter++}`,
         name: compiled.name,
-        source: withClassName(nextSource, compiled.name),
+        source,
+        path: uniqueFilePath('res://components', compiled.name, '.ts'),
         builtin: false,
         ctor: compiled.ctor,
         error: null,
       }
+      writeText(resource.path, source)
       this.components.set(resource.id, resource)
       this.log(`Created component ${resource.name}`)
       return { id: resource.id }
@@ -1371,6 +1390,8 @@ export class EditorState {
       resource.name = compiled.name
       if (previousName !== resource.name) this.signalBus.renameComponent(previousName, resource.name)
       resource.source = source
+      resource.path = this.retitleFile(resource.path, parentPath(resource.path), compiled.name, '.ts')
+      writeText(resource.path, source)
       resource.ctor = compiled.ctor
       resource.error = null
       this.retargetInstances(resource)
@@ -1461,6 +1482,7 @@ export class EditorState {
       if (instance.resourceId === resourceId) this.removeComponent(instance.id)
     }
     this.components.delete(resourceId)
+    if (resource.path) removePath(resource.path)
     this.log(`Deleted ${resource.name}`)
     this.touchScene()
   }
@@ -1722,6 +1744,8 @@ export class EditorState {
     resource.type = type
     resource.params = defaultParams(type)
     resource.name = this.uniqueResourceName(geometryEntry(type).label, this.geometries, resource.id)
+    resource.path = this.retitleFile(resource.path, 'res://meshes', resource.name, '.json')
+    this.writeGeometryFile(resource)
     this.rebuildGeometry(resource.id)
     this.touchScene()
   }
@@ -1755,6 +1779,131 @@ export class EditorState {
     this.touchScene()
   }
 
+  clearGeometry(nodeId: string): void {
+    const node = this.nodes.get(nodeId)
+    if (!node || node.kind !== 'MeshInstance3D') return
+    node.geometryId = null
+    ;(node.object as THREE.Mesh).geometry = new THREE.BufferGeometry()
+    this.touchScene()
+  }
+
+  clearMaterial(nodeId: string): void {
+    const node = this.nodes.get(nodeId)
+    if (!node || node.kind !== 'MeshInstance3D') return
+    node.materialId = null
+    ;(node.object as THREE.Mesh).material = new THREE.MeshStandardNodeMaterial()
+    this.touchScene()
+  }
+
+  assignGeometryPath(nodeId: string, path: string): void {
+    const geometryId = this.geometryRuntimeForPath(path)
+    if (geometryId) this.assignGeometry(nodeId, geometryId)
+  }
+
+  assignMaterialPath(nodeId: string, path: string): void {
+    const materialId = this.materialRuntimeForPath(path)
+    if (materialId) this.assignMaterial(nodeId, materialId)
+  }
+
+  focusGeometryFile(path: string): string | null {
+    return this.geometryRuntimeForPath(path)
+  }
+
+  focusMaterialFile(path: string): string | null {
+    return this.materialRuntimeForPath(path)
+  }
+
+  /** Point in-memory resources at a file that moved on disk. */
+  retargetProjectPath(from: string, to: string): void {
+    const apply = (path: string) => retarget(path, from, to)
+    for (const resource of this.geometries.values()) resource.path = apply(resource.path)
+    for (const resource of this.materials.values()) resource.path = apply(resource.path)
+    for (const resource of this.components.values()) resource.path = apply(resource.path)
+    for (const node of this.nodes.values()) {
+      if (node.instancePath) node.instancePath = apply(node.instancePath)
+    }
+    if (this.scenePath === from || this.scenePath.startsWith(`${from}/`)) this.scenePath = apply(this.scenePath)
+  }
+
+  /** Drop a mesh or material file from the open scene. The file itself is removed by the caller. */
+  releaseResourcePath(path: string): void {
+    const hit = (resourcePath: string) => resourcePath === path || resourcePath.startsWith(`${path}/`)
+    for (const [id, resource] of this.geometries) {
+      if (!hit(resource.path)) continue
+      for (const node of this.usersOfGeometry(id)) this.clearGeometry(node.id)
+      resource.geometry?.dispose()
+      this.geometries.delete(id)
+    }
+    for (const [id, resource] of this.materials) {
+      if (!hit(resource.path)) continue
+      for (const node of this.usersOfMaterial(id)) this.clearMaterial(node.id)
+      resource.material?.dispose()
+      this.materials.delete(id)
+    }
+  }
+
+  reloadResourceFile(path: string): void {
+    if ((isMeshFile(path) || isMaterialFile(path) || path.endsWith('.tres') || path.endsWith('.tsl')) && !readCached(path)) {
+      this.releaseResourcePath(path)
+      return
+    }
+    if (isMeshFile(path) || path.endsWith('.tres')) {
+      const file = readMeshFile(path)
+      const resource = [...this.geometries.values()].find((item) => item.path === path)
+      if (!file || !resource) return
+      resource.name = file.name
+      resource.type = file.type
+      resource.params = { ...defaultParams(file.type), ...file.params }
+      this.rebuildGeometry(resource.id)
+      return
+    }
+    if (!isMaterialFile(path) && !path.endsWith('.tsl')) return
+    const file = readMaterialFile(path)
+    const resource = [...this.materials.values()].find((item) => item.path === path)
+    if (!file || !resource) return
+    resource.name = file.name
+    resource.source = file.source
+    resource.side = file.side
+    resource.transparent = file.transparent
+    resource.wireframe = file.wireframe
+    const compiled = this.compileMaterial(resource.id)
+    if (!compiled.ok) this.log(`${file.name}: ${compiled.error}`, 'error')
+  }
+
+  syncComponentFile(path: string): void {
+    if (!path.endsWith('.ts')) return
+    const source = readCached(path)
+    const existing = [...this.components.values()].find((item) => item.path === path)
+    if (source === null) {
+      if (!existing) return
+      const used = [...this.componentInstances.values()].some((item) => item.resourceId === existing.id)
+      if (used) {
+        this.log(`${path} was removed from disk. The open scene still uses it.`, 'warn')
+        return
+      }
+      this.components.delete(existing.id)
+      return
+    }
+    if (!source.includes('extends Object3DBehaviour')) return
+    if (!existing) {
+      this.adoptComponentFile(path, source)
+      return
+    }
+    if (existing.source === source) return
+    try {
+      const compiled = compileComponent(source)
+      existing.builtin = false
+      if (compiled.name !== existing.name) this.signalBus.renameComponent(existing.name, compiled.name)
+      existing.name = compiled.name
+      existing.source = source
+      existing.ctor = compiled.ctor
+      existing.error = null
+      this.retargetInstances(existing)
+    } catch (error) {
+      existing.error = error instanceof Error ? error.message : String(error)
+    }
+  }
+
   assignGeometry(nodeId: string, geometryId: string): void {
     const node = this.nodes.get(nodeId)
     const resource = this.geometries.get(geometryId)
@@ -1768,7 +1917,7 @@ export class EditorState {
     const node = this.nodes.get(nodeId)
     const current = node?.geometryId ? this.geometries.get(node.geometryId) : undefined
     if (!node || !current) return
-    const copy = this.createGeometryResource(current.type, { ...current.params }, `${current.name}Unique`)
+    const copy = this.createGeometryResource(current.type, { ...current.params }, `${current.name}Unique`, { persist: true })
     this.rebuildGeometry(copy.id)
     this.assignGeometry(nodeId, copy.id)
   }
@@ -1776,7 +1925,7 @@ export class EditorState {
   newGeometryFor(nodeId: string, type: GeometryType): void {
     const node = this.nodes.get(nodeId)
     if (!node || node.kind !== 'MeshInstance3D') return
-    const resource = this.createGeometryResource(type, defaultParams(type))
+    const resource = this.createGeometryResource(type, defaultParams(type), undefined, { persist: true })
     this.rebuildGeometry(resource.id)
     node.imported = false
     this.assignGeometry(nodeId, resource.id)
@@ -1827,6 +1976,8 @@ export class EditorState {
     const next = name.trim().replace(/[\\/]/g, '')
     if (!resource || !next) return
     resource.name = this.uniqueResourceName(next, this.materials, resource.id)
+    resource.path = this.retitleFile(resource.path, 'res://materials', resource.name, '.json')
+    this.persistMaterialFile(resource)
     if (resource.material) resource.material.name = resource.name
     this.touchScene()
   }
@@ -1868,7 +2019,7 @@ export class EditorState {
     const node = this.nodes.get(nodeId)
     if (!node || node.kind !== 'MeshInstance3D') return null
     const preset = presetById(presetId)
-    const resource = this.createMaterialResource(preset.name, preset.source, { ...DEFAULT_FLAGS })
+    const resource = this.createMaterialResource(preset.name, preset.source, { ...DEFAULT_FLAGS }, { persist: true })
     const compiled = this.compileMaterial(resource.id)
     if (!compiled.ok) {
       this.materials.delete(resource.id)
@@ -1884,7 +2035,7 @@ export class EditorState {
     const node = this.nodes.get(nodeId)
     const current = node?.materialId ? this.materials.get(node.materialId) : undefined
     if (!node || !current) return
-    const copy = this.createMaterialResource(`${current.name}Unique`, current.source, this.flagsOf(current))
+    const copy = this.createMaterialResource(`${current.name}Unique`, current.source, this.flagsOf(current), { persist: true })
     const compiled = this.compileMaterial(copy.id)
     if (!compiled.ok) {
       this.materials.delete(copy.id)
@@ -2359,7 +2510,13 @@ export class EditorState {
         if (!resource) return null
         const id = `g${++geoCount}`
         geometryFileIds.set(node.geometryId, id)
-        geometries.push({ id, name: unique(resource.name), type: resource.type, params: { ...resource.params } })
+        geometries.push({
+          id,
+          name: unique(resource.name),
+          type: resource.type,
+          params: { ...resource.params },
+          path: resource.path,
+        })
         return id
       }
       const geometry = node.object.geometry
@@ -2372,11 +2529,13 @@ export class EditorState {
       }
       const id = `g${++geoCount}`
       looseGeometry.set(geometry.uuid, id)
+      const looseName = unique(geometry.name || geometryEntry(snapshot.type).label)
       geometries.push({
         id,
-        name: unique(geometry.name || geometryEntry(snapshot.type).label),
+        name: looseName,
         type: snapshot.type,
         params: snapshot.params,
+        path: uniqueFilePath('res://meshes', fileStem(looseName), '.json'),
       })
       return id
     }
@@ -2397,6 +2556,7 @@ export class EditorState {
           side: resource.side,
           transparent: resource.transparent,
           wireframe: resource.wireframe,
+          path: resource.path,
         })
         return id
       }
@@ -2415,13 +2575,15 @@ export class EditorState {
       }
       const id = `m${++matCount}`
       looseMaterial.set(single.uuid, id)
+      const looseName = unique(single.name || 'Material')
       materials.push({
         id,
-        name: unique(single.name || 'Material'),
+        name: looseName,
         source: snapshot.source,
         side: snapshot.side,
         transparent: snapshot.transparent,
         wireframe: snapshot.wireframe,
+        path: uniqueFilePath('res://materials', fileStem(looseName), '.json'),
       })
       return id
     }
@@ -2516,7 +2678,7 @@ export class EditorState {
 
       const geoMap = new Map<string, string>()
       for (const record of file.geometries) {
-        const resource = this.createGeometryResource(record.type, record.params, record.name)
+        const resource = this.createGeometryResource(record.type, record.params, record.name, { path: record.path })
         geoMap.set(record.id, resource.id)
       }
       const matMap = new Map<string, string>()
@@ -2525,7 +2687,7 @@ export class EditorState {
           side: record.side,
           transparent: record.transparent,
           wireframe: record.wireframe,
-        })
+        }, { path: record.path })
         const compiled = this.compileMaterial(resource.id)
         if (!compiled.ok) this.log(`${record.name}: ${compiled.error}`, 'error')
         matMap.set(record.id, resource.id)
@@ -2588,20 +2750,20 @@ export class EditorState {
     let object: THREE.Object3D
 
     if (record.kind === 'MeshInstance3D') {
-      geometryId = record.geometryId ? geoMap.get(record.geometryId) ?? null : null
-      materialId = record.materialId ? matMap.get(record.materialId) ?? null : null
-      if (!geometryId || !this.geometries.get(geometryId)?.geometry) {
-        geometryId = this.createGeometryResource('box', defaultParams('box')).id
-      }
-      if (!materialId || !this.materials.get(materialId)?.material) {
-        const resource = this.createMaterialResource('Lit', presetById('lit').source, { ...DEFAULT_FLAGS })
-        this.compileMaterial(resource.id)
-        materialId = resource.id
-      }
-      const geometry = this.geometries.get(geometryId)?.geometry
-      const material = this.materials.get(materialId)?.material
-      if (!geometry || !material) throw new Error(`Could not build ${record.name}.`)
-      const mesh = new THREE.Mesh(geometry, material)
+      geometryId = record.geometryPath
+        ? this.geometryRuntimeForPath(record.geometryPath)
+        : (record.geometryId ? geoMap.get(record.geometryId) ?? null : null)
+      materialId = record.materialPath
+        ? this.materialRuntimeForPath(record.materialPath)
+        : (record.materialId ? matMap.get(record.materialId) ?? null : null)
+      const geometry = geometryId ? this.geometries.get(geometryId)?.geometry ?? null : null
+      const material = materialId ? this.materials.get(materialId)?.material ?? null : null
+      if (!geometry) geometryId = null
+      if (!material) materialId = null
+      const mesh = new THREE.Mesh(
+        geometry ?? new THREE.BufferGeometry(),
+        material ?? new THREE.MeshStandardNodeMaterial(),
+      )
       mesh.castShadow = record.castShadow
       mesh.receiveShadow = record.receiveShadow
       object = mesh
@@ -2713,7 +2875,7 @@ export class EditorState {
 
     const geoMap = new Map<string, string>()
     for (const record of file.geometries) {
-      const resource = this.createGeometryResource(record.type, record.params, record.name)
+      const resource = this.createGeometryResource(record.type, record.params, record.name, { path: record.path })
       geoMap.set(record.id, resource.id)
     }
     const matMap = new Map<string, string>()
@@ -2722,7 +2884,7 @@ export class EditorState {
         side: record.side,
         transparent: record.transparent,
         wireframe: record.wireframe,
-      })
+      }, { path: record.path })
       const compiled = this.compileMaterial(resource.id)
       if (!compiled.ok) this.log(`${record.name}: ${compiled.error}`, 'error')
       matMap.set(record.id, resource.id)
@@ -3267,7 +3429,7 @@ export class EditorState {
    * Point and spot lights use decay 0 so the Energy field stays bright out to Range.
    * Three's default decay of 2 is candela with inverse-square falloff, which makes
    * an energy of 2.4 invisible a couple of metres away. Directional and spot lights
-   * also get a shadow frustum large enough for the starter floor.
+   * also get a shadow frustum large enough for the default view.
    */
   private prepareLight(light: THREE.Light, lookAt: THREE.Vector3 | null): void {
     if (light instanceof THREE.PointLight || light instanceof THREE.SpotLight) light.decay = 0
@@ -3324,6 +3486,106 @@ export class EditorState {
     return root
   }
 
+  private loadProjectComponents(): void {
+    if (!projectReady() || this.projectComponentsLoaded) return
+    this.projectComponentsLoaded = true
+    for (const path of projectPaths()) {
+      if (!path.endsWith('.ts')) continue
+      const source = readCached(path)
+      if (!source || !source.includes('extends Object3DBehaviour')) continue
+      this.adoptComponentFile(path, source)
+    }
+  }
+
+  private adoptComponentFile(path: string, source: string): void {
+    const builtin = BUILTIN_COMPONENTS.find((item) => item.source === source)
+    const fallbackName = fileStem(path.slice(path.lastIndexOf('/') + 1).replace(/\.ts$/, ''))
+    try {
+      const compiled = builtin ? { name: builtin.name, ctor: builtin.ctor } : compileComponent(source)
+      if ([...this.components.values()].some((item) => item.path === path || item.name === compiled.name)) return
+      const id = `cmp${this.idCounter++}`
+      this.components.set(id, {
+        id,
+        name: compiled.name,
+        source,
+        path,
+        builtin: Boolean(builtin),
+        ctor: compiled.ctor,
+        error: null,
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const id = `cmp${this.idCounter++}`
+      this.components.set(id, {
+        id,
+        name: fallbackName || 'Component',
+        source,
+        path,
+        builtin: false,
+        ctor: class BrokenComponent extends Object3DBehaviour {},
+        error: message,
+      })
+      this.log(`${path}: ${message}`, 'error')
+    }
+  }
+
+  private geometryRuntimeForPath(path: string): string | null {
+    for (const resource of this.geometries.values()) {
+      if (resource.path === path) return resource.id
+    }
+    const file = readMeshFile(path)
+    if (!file || !GEOMETRY_CATALOG.some((entry) => entry.type === file.type)) {
+      this.log(`Missing mesh ${path}.`, 'warn')
+      return null
+    }
+    return this.createGeometryResource(file.type, file.params, file.name, { path }).id
+  }
+
+  private materialRuntimeForPath(path: string): string | null {
+    for (const resource of this.materials.values()) {
+      if (resource.path === path) return resource.id
+    }
+    const file = readMaterialFile(path)
+    if (!file) {
+      this.log(`Missing material ${path}.`, 'warn')
+      return null
+    }
+    const resource = this.createMaterialResource(file.name, file.source, {
+      side: file.side,
+      transparent: file.transparent,
+      wireframe: file.wireframe,
+    }, { path })
+    const compiled = this.compileMaterial(resource.id)
+    if (!compiled.ok) this.log(`${file.name}: ${compiled.error}`, 'error')
+    return resource.id
+  }
+
+  private retitleFile(current: string, dir: string, stem: string, ext: string): string {
+    const next = uniqueFilePath(dir, fileStem(stem), ext, current)
+    if (next !== current && hasFile(current)) movePath(current, next)
+    return next
+  }
+
+  private writeGeometryFile(resource: GeometryResource): void {
+    writeMeshFile(resource.path, {
+      version: 1,
+      name: resource.name,
+      type: resource.type,
+      params: { ...resource.params },
+    })
+  }
+
+  private persistMaterialFile(resource: MaterialResource): void {
+    writeMaterialFile(resource.path, {
+      version: 1,
+      name: resource.name,
+      source: resource.source,
+      side: resource.side,
+      transparent: resource.transparent,
+      wireframe: resource.wireframe,
+    })
+  }
+
   private spawnPoint(lift: number): THREE.Vector3 {
     const target = this.starter?.ctx.modules.orbitControls.controls.target
     const point = target ? target.clone() : new THREE.Vector3()
@@ -3331,13 +3593,20 @@ export class EditorState {
     return point
   }
 
-  private createGeometryResource(type: GeometryType, params: Record<string, number>, name?: string): GeometryResource {
+  private createGeometryResource(
+    type: GeometryType,
+    params: Record<string, number>,
+    name?: string,
+    options?: { path?: string, persist?: boolean },
+  ): GeometryResource {
     const paramsWithDefaults = { ...defaultParams(type), ...params }
+    const resourceName = this.uniqueResourceName(name ?? geometryEntry(type).label, this.geometries)
     const resource: GeometryResource = {
       id: `geo${this.idCounter++}`,
-      name: this.uniqueResourceName(name ?? geometryEntry(type).label, this.geometries),
+      name: resourceName,
       type,
       params: paramsWithDefaults,
+      path: options?.path ?? uniqueFilePath('res://meshes', fileStem(resourceName), '.json'),
       geometry: null,
       defaults: { type, params: { ...paramsWithDefaults } },
     }
@@ -3347,10 +3616,16 @@ export class EditorState {
     resource.defaults.params = { ...resource.params }
     resource.geometry = buildGeometry(type, resource.params)
     this.geometries.set(resource.id, resource)
+    if (options?.persist) this.writeGeometryFile(resource)
     return resource
   }
 
-  private createMaterialResource(name: string, source: string, flags: MaterialFlags): MaterialResource {
+  private createMaterialResource(
+    name: string,
+    source: string,
+    flags: MaterialFlags,
+    options?: { path?: string, persist?: boolean },
+  ): MaterialResource {
     const unique = this.uniqueResourceName(name, this.materials)
     const resource: MaterialResource = {
       id: `mat${this.idCounter++}`,
@@ -3359,6 +3634,7 @@ export class EditorState {
       side: flags.side,
       transparent: flags.transparent,
       wireframe: flags.wireframe,
+      path: options?.path ?? uniqueFilePath('res://materials', fileStem(unique), '.json'),
       material: null,
       error: null,
       defaults: {
@@ -3370,6 +3646,7 @@ export class EditorState {
       },
     }
     this.materials.set(resource.id, resource)
+    if (options?.persist) this.persistMaterialFile(resource)
     return resource
   }
 
@@ -3428,23 +3705,44 @@ export class EditorState {
       const ctor = behaviour.constructor as Object3DBehaviourConstructor
       let resource = this.resourceByConstructor(ctor)
       if (!resource) {
-        const name = this.uniqueComponentName(ctor.name || 'Component')
-        resource = {
-          id: `cmp${this.idCounter++}`,
-          name,
-          source: `// ${name} was already attached to an object.\n`,
-          builtin: false,
-          ctor,
-          error: null,
-        }
-        this.components.set(resource.id, resource)
+        const className = ctor.name
+        resource = className
+          ? [...this.components.values()].find((item) => item.name === className)
+          : undefined
       }
+      // The starter cube already has behaviours. The saved scene replaces that
+      // cube on open. A missing project file must not become a new component.
+      if (!resource) continue
       this.trackInstance(node, resource, behaviour)
     }
   }
 
-  private uniqueComponentName(raw: string): string {
-    return uniqueIdentifier(raw, this.componentNames())
+  /** File-system rename. The scene tree uses the new file name. */
+  renameComponentFile(path: string): void {
+    const resource = [...this.components.values()].find((item) => item.path === path)
+    if (!resource || !path.endsWith('.ts')) return
+    const stem = path.slice(path.lastIndexOf('/') + 1, -3)
+    const taken = new Set(this.componentNames())
+    taken.delete(resource.name)
+    const className = uniqueIdentifier(stem, taken)
+    if (!className || resource.name === className) return
+    const source = withClassName(resource.source, className)
+    try {
+      const compiled = compileComponent(source)
+      const previous = resource.name
+      resource.builtin = false
+      resource.name = compiled.name
+      resource.source = source
+      resource.ctor = compiled.ctor
+      resource.error = null
+      writeText(path, source)
+      if (previous !== resource.name) this.signalBus.renameComponent(previous, resource.name)
+      this.retargetInstances(resource)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      resource.error = message
+      this.log(`${path}: ${message}`, 'error')
+    }
   }
 
   private retargetInstances(resource: ComponentResource): void {

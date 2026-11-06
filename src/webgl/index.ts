@@ -15,21 +15,15 @@ import {
 import {
   ThreeContextEvents,
   ThreeStart,
-  addComponent
 } from "three-start"
 import { AssetLoaderModule } from './modules/AssetLoader'
 import { OrbitControlsModule } from './modules/OrbitControls'
 import { InspectorModule } from './modules/Inspector'
 import { InputModule } from './modules/Input'
 import { physicsEnabled, readPhysicsState } from '../editor/physicsSettings'
+import { ensureProject } from '../editor/projectFs'
 
-import { ScaleMaterial } from './materials/scale'
-import { Spin } from './behaviors/Spin'
 import { DEFAULT_FLAGS, compileTSLMaterial, presetById } from '../editor/tsl'
-
-// The cube keeps this shared material. Save reads the source so a loaded scene can rebuild it.
-ScaleMaterial.userData.tslSource = presetById('uv').source
-if (!ScaleMaterial.name) ScaleMaterial.name = 'Scale'
 
 //
 // Setup
@@ -81,6 +75,7 @@ function remountScene(container: HTMLDivElement): void {
 }
 
 async function bootOnce(container: HTMLDivElement): Promise<void> {
+await ensureProject()
 if (physicsEnabled()) {
   const { PhysicsModule } = await import('./modules/Physics')
   starter.addModules({ physics: new PhysicsModule(readPhysicsState().world) })
@@ -100,27 +95,15 @@ renderer.shadowMap.type = THREE.PCFShadowMap
 modules.assetLoader.createKTX2Loader()
 
 //
-// Floor. The UV preset paints albedo from mesh UVs and stays lit, so shadows show.
+// One cube. The Lit preset is the MeshStandardNodeMaterial default.
 //
-const floorMaterial = compileTSLMaterial(presetById('uv').source, { ...DEFAULT_FLAGS })
-floorMaterial.name = 'UV'
-floorMaterial.userData.tslSource = presetById('uv').source
-const floor = new THREE.Mesh(new THREE.BoxGeometry(10, 0.5, 10), floorMaterial)
-floor.name = 'Floor'
-floor.position.set(0, 0, 0)
-floor.receiveShadow = true
-floor.castShadow = true
-scene.add(floor)
-
-//
-// Spinning cube
-//
-const cube = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), ScaleMaterial)
+const lit = presetById('lit')
+const cubeMaterial = compileTSLMaterial(lit.source, { ...DEFAULT_FLAGS })
+cubeMaterial.name = lit.name
+cubeMaterial.userData.tslSource = lit.source
+const cube = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), cubeMaterial)
 cube.name = 'Cube'
 cube.castShadow = true
-cube.position.set(0, 1.5, 0)
-addComponent(cube, Spin, { axis: 'y', speed: 1 })
-addComponent(cube, Spin, { axis: 'z', speed: 0.87 })
 scene.add(cube)
 
 camera.position.set(6.2, 4.2, 7.4)

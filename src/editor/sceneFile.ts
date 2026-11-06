@@ -5,10 +5,23 @@ import { isGroupRecord, type GroupRecord } from './groups'
 import { isSignalDefinition, isSignalLinkRecord, type SignalDefinition, type SignalLinkRecord } from './signals'
 import type { GridSettings, LightDefaults, NodeKind, SceneSettings, ShadowTypeName } from './state'
 import { isBodySettings, type BodySettings } from './physicsBody'
+import {
+  fileStem,
+  isScenePath,
+  readCached,
+  readSettings,
+  removePath,
+  projectPaths,
+  uniqueFilePath,
+  writeMaterialFile,
+  writeSettings,
+  writeMeshFile,
+  writeText,
+} from './projectFs'
 import type { MaterialSide } from './tsl'
 
 /** Scene that opens when the project has no saved scene yet. */
-export const OPEN_SCENE_PATH = 'res://World.tscn'
+export const OPEN_SCENE_PATH = 'res://World.json'
 
 export interface SceneComponentRecord {
   name: string
@@ -21,6 +34,8 @@ export interface SceneGeometryRecord {
   name: string
   type: GeometryType
   params: Record<string, number>
+  /** `res://` mesh file. Older scene files omit it. */
+  path?: string
 }
 
 export interface SceneMaterialRecord {
@@ -30,6 +45,8 @@ export interface SceneMaterialRecord {
   side: MaterialSide
   transparent: boolean
   wireframe: boolean
+  /** `res://` material file. Older scene files omit it. */
+  path?: string
 }
 
 export interface SceneNodeRecord {
@@ -45,6 +62,10 @@ export interface SceneNodeRecord {
   receiveShadow: boolean
   geometryId: string | null
   materialId: string | null
+  /** Mesh file. Set when the mesh is stored outside the scene. */
+  geometryPath?: string | null
+  /** Material file. Set when the material is stored outside the scene. */
+  materialPath?: string | null
   light: LightDefaults | null
   /** Present on camera nodes. Older scene files omit it. */
   camera?: CameraSettings | null
@@ -106,8 +127,6 @@ export interface SceneFile {
   connections?: SignalLinkRecord[]
 }
 
-const STORAGE_KEY = 'threejs-starter.scene-files'
-
 const NODE_KINDS = new Set<NodeKind>([
   'Node3D',
   'WorldEnvironment',
@@ -129,19 +148,20 @@ export function sceneFileName(path: string): string {
   return slash === -1 ? path : path.slice(slash + 1)
 }
 
-/** Accept `Name`, `Name.tscn`, or `res://folder/Name.tscn`. */
+/** Accept `Name`, `Name.json`, or `res://folder/Name.json`. A `.tscn` suffix becomes `.json`. */
 export function normalizeScenePath(input: string): string | null {
   let path = input.trim().replace(/\\/g, '/')
   if (!path) return null
   if (!path.startsWith('res://')) path = `res://${path.replace(/^\/+/, '')}`
-  if (!path.endsWith('.tscn')) path += '.tscn'
+  if (path.endsWith('.tscn')) path = `${path.slice(0, -'.tscn'.length)}.json`
+  if (!path.endsWith('.json')) path += '.json'
   if (path.includes('..')) return null
-  if (!/^res:\/\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.tscn$/.test(path)) return null
+  if (!/^res:\/\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.json$/.test(path)) return null
   return path
 }
 
 export function readOpenPath(): string {
-  return readBlob()?.openPath || OPEN_SCENE_PATH
+  return readSettings().openPath || OPEN_SCENE_PATH
 }
 
 /** Open the last saved scene, or the starter path when nothing has been saved. */
@@ -152,22 +172,31 @@ export function preferredOpenPath(): string {
 }
 
 export function rememberOpenPath(path: string): void {
-  const current = readBlob()
-  writeBlob({ openPath: path, files: current?.files ?? [] })
+  const current = readSettings()
+  if (current.openPath === path) return
+  writeSettings({ ...current, openPath: path })
 }
 
 export function removeSceneFile(path: string): void {
-  const current = readBlob()
-  if (!current) return
-  writeBlob({
-    openPath: current.openPath === path ? OPEN_SCENE_PATH : current.openPath,
-    files: current.files.filter((file) => file.path !== path),
-  })
+  const current = readSettings()
+  if (current.openPath === path) writeSettings({ ...current, openPath: OPEN_SCENE_PATH })
+  removePath(path)
 }
 
 export function readSceneLibrary(): SceneFile[] {
-  const blob = readBlob()
-  return blob?.files ?? []
+  const library: SceneFile[] = []
+  for (const path of projectPaths()) {
+    if (!isScenePath(path)) continue
+    const text = readCached(path)
+    if (!text) continue
+    try {
+      const parsed = JSON.parse(text) as unknown
+      if (isSceneFile(parsed)) library.push(parsed)
+    } catch {
+      // Skip a file that is not a scene.
+    }
+  }
+  return library
 }
 
 export function readSceneFile(path: string): SceneFile | null {
@@ -179,35 +208,53 @@ export function hasSceneFile(path: string): boolean {
 }
 
 export function writeSceneFile(file: SceneFile): void {
-  const current = readBlob()
-  const files = (current?.files ?? []).filter((item) => item.path !== file.path)
-  files.push(file)
-  writeBlob({ openPath: file.path, files })
+  const disk = externalizeScene(file)
+  writeText(disk.path, `${JSON.stringify(disk, null, 2)}\n`)
+  rememberOpenPath(file.path)
 }
 
-function readBlob(): { openPath: string, files: SceneFile[] } | null {
-  if (typeof localStorage === 'undefined') return null
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as unknown
-    if (!parsed || typeof parsed !== 'object') return null
-    const files = (parsed as { files?: unknown }).files
-    if (!Array.isArray(files)) return null
-    return {
-      openPath: typeof (parsed as { openPath?: unknown }).openPath === 'string'
-        ? (parsed as { openPath: string }).openPath
-        : OPEN_SCENE_PATH,
-      files: files.filter(isSceneFile),
-    }
-  } catch {
-    return null
+/** Write meshes and materials beside the scene. The returned scene points at those files. */
+export function externalizeScene(file: SceneFile): SceneFile {
+  const geoPaths = new Map<string, string>()
+  const matPaths = new Map<string, string>()
+  for (const record of file.geometries) {
+    const path = record.path?.startsWith('res://')
+      ? record.path
+      : uniqueFilePath('res://meshes', fileStem(record.name), '.json')
+    geoPaths.set(record.id, path)
+    writeMeshFile(path, {
+      version: 1,
+      name: record.name,
+      type: record.type,
+      params: record.params,
+    }, true)
   }
-}
-
-function writeBlob(blob: { openPath: string, files: SceneFile[] }): void {
-  if (typeof localStorage === 'undefined') return
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(blob))
+  for (const record of file.materials) {
+    const path = record.path?.startsWith('res://')
+      ? record.path
+      : uniqueFilePath('res://materials', fileStem(record.name), '.json')
+    matPaths.set(record.id, path)
+    writeMaterialFile(path, {
+      version: 1,
+      name: record.name,
+      source: record.source,
+      side: record.side,
+      transparent: record.transparent,
+      wireframe: record.wireframe,
+    }, true)
+  }
+  return {
+    ...file,
+    geometries: [],
+    materials: [],
+    nodes: file.nodes.map((node) => ({
+      ...node,
+      geometryPath: node.geometryId ? geoPaths.get(node.geometryId) ?? node.geometryPath ?? null : node.geometryPath ?? null,
+      materialPath: node.materialId ? matPaths.get(node.materialId) ?? node.materialPath ?? null : node.materialPath ?? null,
+      geometryId: null,
+      materialId: null,
+    })),
+  }
 }
 
 export function isSceneFile(value: unknown): value is SceneFile {
@@ -287,6 +334,8 @@ function isNodeRecord(value: unknown): value is SceneNodeRecord {
     && typeof record.receiveShadow === 'boolean'
     && (record.geometryId === null || typeof record.geometryId === 'string')
     && (record.materialId === null || typeof record.materialId === 'string')
+    && (record.geometryPath == null || (typeof record.geometryPath === 'string' && record.geometryPath.startsWith('res://')))
+    && (record.materialPath == null || (typeof record.materialPath === 'string' && record.materialPath.startsWith('res://')))
     && (record.light === null || isLight(record.light))
     && (record.camera == null || isCameraSettings(record.camera))
     && (record.environment == null || isEnvironmentSettings(record.environment))

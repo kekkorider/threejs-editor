@@ -34,7 +34,7 @@ Esc      Stop play, or close a dialog
 Drag a scene-tree row onto another node to reparent it.
 Drag a saved scene from the File system onto a node to instance it.
 Drag a component onto an object to add it. Double-click a component to edit it in the Script tab.
-The Script dock follows the selected node. Attach, edit, and detach its script there.
+The Script screen edits a component or a JSON file. Double-click a component, or double-click a JSON file in the File system.
 TSL in the bottom panel stays the material script.
 Click the script icon on a scene-tree row to open that node's script.
 Drag the colored x / y / z labels to scrub a value.

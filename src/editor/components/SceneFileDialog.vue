@@ -28,7 +28,7 @@ function onKey(event: KeyboardEvent): void {
         <span id="save-as-title">Save Scene As</span>
       </div>
       <div class="warning-body">
-        <p>The path is the File system entry for this scene. Folders are part of the path, as in <span class="path">res://props/Crate.tscn</span>.</p>
+        <p>The path is the File system entry for this scene. Folders are part of the path, as in <span class="path">res://props/Crate.json</span>.</p>
         <input v-model="store.sceneDialogPath" class="path-input" type="text" spellcheck="false" autofocus />
         <p v-if="store.sceneSaveAsReplaces" class="hint">A scene at that path will be replaced.</p>
         <p v-if="store.sceneDialogError" class="hint error">{{ store.sceneDialogError }}</p>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, reactive } from 'vue'
+import { readSettings, writePanelLayout } from '../projectFs'
 import AssetLibrary from '../components/AssetLibrary.vue'
 import BottomPanel from '../components/BottomPanel.vue'
 import ComponentWarning from '../components/ComponentWarning.vue'
@@ -15,7 +16,6 @@ import NodeDock from '../components/NodeDock.vue'
 import PopupMenu from '../components/PopupMenu.vue'
 import SceneDock from '../components/SceneDock.vue'
 import SceneFileDialog from '../components/SceneFileDialog.vue'
-import ScriptDock from '../components/ScriptDock.vue'
 import ScriptScreen from '../components/ScriptScreen.vue'
 import TopBar from '../components/TopBar.vue'
 import Viewport from '../components/Viewport.vue'
@@ -23,7 +23,7 @@ import { useEditorStore } from '../stores/editor'
 import '../editor.css'
 
 const store = useEditorStore()
-const metrics = reactive({ left: 272, right: 340, bottom: 236, files: 200, script: 220, node: 280 })
+const metrics = reactive({ ...readSettings().layout })
 
 function styleVars(): Record<string, string> {
   return {
@@ -31,13 +31,26 @@ function styleVars(): Record<string, string> {
     '--right': `${metrics.right}px`,
     '--bottom': `${metrics.bottom}px`,
     '--files': `${metrics.files}px`,
-    '--script': `${metrics.script}px`,
     '--node': `${metrics.node}px`,
   }
 }
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
+}
+
+function saveLayout(): void {
+  writePanelLayout({
+    left: metrics.left,
+    right: metrics.right,
+    bottom: metrics.bottom,
+    files: metrics.files,
+    node: metrics.node,
+  })
+}
+
+function nodeMax(): number {
+  return Math.max(160, window.innerHeight - 180)
 }
 
 function onSplit(event: PointerEvent, axis: 'x' | 'y', apply: (delta: number) => void): void {
@@ -53,6 +66,7 @@ function onSplit(event: PointerEvent, axis: 'x' | 'y', apply: (delta: number) =>
     window.removeEventListener('pointermove', move)
     window.removeEventListener('pointerup', up)
     document.body.style.cursor = ''
+    saveLayout()
   }
   document.body.style.cursor = axis === 'x' ? 'col-resize' : 'row-resize'
   window.addEventListener('pointermove', move)
@@ -132,14 +146,9 @@ onBeforeUnmount(() => {
         <InspectorDock />
         <div
           class="splitter h"
-          @pointerdown="onSplit($event, 'y', (delta) => { metrics.node = clamp(metrics.node - delta, 140, 520) })"
+          @pointerdown="onSplit($event, 'y', (delta) => { metrics.node = clamp(metrics.node - delta, 120, nodeMax()) })"
         />
         <NodeDock />
-        <div
-          class="splitter h"
-          @pointerdown="onSplit($event, 'y', (delta) => { metrics.script = clamp(metrics.script - delta, 120, 520) })"
-        />
-        <ScriptDock />
       </aside>
     </div>
     <PopupMenu

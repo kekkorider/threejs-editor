@@ -29,7 +29,7 @@ A direction arrow follows local -Z.
 The arrow is the direction the light shines.
 
 The default directional light looks at the origin.
-Its shadow coverage is wide enough for the floor.
+Its shadow coverage is wide enough for the default view.
 
 ## OmniLight
 
@@ -97,8 +97,7 @@ Read [[Viewport]].
 ## Shadows
 
 Cast Shadow and Receive Shadow are on the Visibility section.
-The floor receives shadows.
-The starter meshes cast shadows.
+The starter cube casts shadows.
 The shadow map type is on the WorldEnvironment.
 Read [[World environment and grid]].
 

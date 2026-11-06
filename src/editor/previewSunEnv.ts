@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu'
+import { readSettings, writeSettings } from './projectFs'
 import {
   copyEnvironmentSettings,
   defaultEnvironmentSettings,
@@ -128,32 +129,39 @@ export function isPreviewSunSettings(value: unknown): value is PreviewSunSetting
     && typeof settings.shadows === 'boolean'
 }
 
-export function readPreviewSunEnvState(): PreviewSunEnvState {
+export function previewFromUnknown(value: unknown): PreviewSunEnvState {
   const fallback = defaultPreviewSunEnvState()
-  if (typeof localStorage === 'undefined') return fallback
-  try {
-    const raw = localStorage.getItem(PREVIEW_SUN_ENV_KEY)
-    if (!raw) return fallback
-    const parsed = JSON.parse(raw) as Partial<PreviewSunEnvState>
-    return {
-      sunEnabled: typeof parsed.sunEnabled === 'boolean' ? parsed.sunEnabled : fallback.sunEnabled,
-      envEnabled: typeof parsed.envEnabled === 'boolean' ? parsed.envEnabled : fallback.envEnabled,
-      sun: isPreviewSunSettings(parsed.sun) ? copyPreviewSunSettings(parsed.sun) : fallback.sun,
-      environment: isEnvironmentSettings(parsed.environment)
-        ? copyEnvironmentSettings(parsed.environment)
-        : fallback.environment,
-    }
-  } catch {
-    return fallback
+  if (!value || typeof value !== 'object') return fallback
+  const parsed = value as Partial<PreviewSunEnvState>
+  return {
+    sunEnabled: typeof parsed.sunEnabled === 'boolean' ? parsed.sunEnabled : fallback.sunEnabled,
+    envEnabled: typeof parsed.envEnabled === 'boolean' ? parsed.envEnabled : fallback.envEnabled,
+    sun: isPreviewSunSettings(parsed.sun) ? copyPreviewSunSettings(parsed.sun) : fallback.sun,
+    environment: isEnvironmentSettings(parsed.environment)
+      ? copyEnvironmentSettings(parsed.environment)
+      : fallback.environment,
   }
 }
 
-export function writePreviewSunEnvState(state: PreviewSunEnvState): void {
-  if (typeof localStorage === 'undefined') return
-  localStorage.setItem(PREVIEW_SUN_ENV_KEY, JSON.stringify({
+export function readPreviewSunEnvState(): PreviewSunEnvState {
+  const state = readSettings().previewSunEnv
+  return {
     sunEnabled: state.sunEnabled,
     envEnabled: state.envEnabled,
     sun: copyPreviewSunSettings(state.sun),
     environment: copyEnvironmentSettings(state.environment),
-  }))
+  }
+}
+
+export function writePreviewSunEnvState(state: PreviewSunEnvState): void {
+  const current = readSettings()
+  writeSettings({
+    ...current,
+    previewSunEnv: {
+      sunEnabled: state.sunEnabled,
+      envEnabled: state.envEnabled,
+      sun: copyPreviewSunSettings(state.sun),
+      environment: copyEnvironmentSettings(state.environment),
+    },
+  })
 }

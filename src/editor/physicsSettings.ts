@@ -1,8 +1,10 @@
 /**
  * Project-wide physics switch and crashcat world settings.
- * Stored beside the preview sun: one copy for every scene.
+ * Stored in res://settings.json: one copy for every scene.
  * `enabled` is read before boot. When it is false, PhysicsModule is not imported.
  */
+
+import { readSettings, writeSettings } from './projectFs'
 
 export const PHYSICS_KEY = 'threejs-starter.physics'
 
@@ -216,41 +218,39 @@ function readPairs(value: unknown, fallback: PhysicsCollisionPairs): PhysicsColl
   }
 }
 
-export function readPhysicsState(): PhysicsState {
+export function physicsFromUnknown(value: unknown): PhysicsState {
   const fallback = defaultPhysicsState()
-  if (typeof localStorage === 'undefined') return fallback
-  try {
-    const raw = localStorage.getItem(PHYSICS_KEY)
-    if (!raw) return fallback
-    const parsed = JSON.parse(raw) as Partial<PhysicsState>
-    const world = parsed.world && typeof parsed.world === 'object' ? parsed.world : {}
-    const contacts = (world as PhysicsWorldSettings).contacts
-    return {
-      enabled: flag(parsed.enabled, fallback.enabled),
-      world: {
-        gravity: vec3((world as PhysicsWorldSettings).gravity, fallback.world.gravity),
-        gravityEnabled: flag((world as PhysicsWorldSettings).gravityEnabled, fallback.world.gravityEnabled),
-        contacts: {
-          contactPointPreserveLambdaMaxDistSq: finite(
-            contacts?.contactPointPreserveLambdaMaxDistSq,
-            fallback.world.contacts.contactPointPreserveLambdaMaxDistSq,
-          ),
-        },
-        narrowphase: readNarrowphase((world as PhysicsWorldSettings).narrowphase, fallback.world.narrowphase),
-        solver: readSolver((world as PhysicsWorldSettings).solver, fallback.world.solver),
-        sleeping: readSleeping((world as PhysicsWorldSettings).sleeping, fallback.world.sleeping),
-        ccd: readCcd((world as PhysicsWorldSettings).ccd, fallback.world.ccd),
-        pairs: readPairs((world as PhysicsWorldSettings).pairs, fallback.world.pairs),
+  if (!value || typeof value !== 'object') return fallback
+  const parsed = value as Partial<PhysicsState>
+  const world = parsed.world && typeof parsed.world === 'object' ? parsed.world : {}
+  const contacts = (world as PhysicsWorldSettings).contacts
+  return {
+    enabled: flag(parsed.enabled, fallback.enabled),
+    world: {
+      gravity: vec3((world as PhysicsWorldSettings).gravity, fallback.world.gravity),
+      gravityEnabled: flag((world as PhysicsWorldSettings).gravityEnabled, fallback.world.gravityEnabled),
+      contacts: {
+        contactPointPreserveLambdaMaxDistSq: finite(
+          contacts?.contactPointPreserveLambdaMaxDistSq,
+          fallback.world.contacts.contactPointPreserveLambdaMaxDistSq,
+        ),
       },
-    }
-  } catch {
-    return fallback
+      narrowphase: readNarrowphase((world as PhysicsWorldSettings).narrowphase, fallback.world.narrowphase),
+      solver: readSolver((world as PhysicsWorldSettings).solver, fallback.world.solver),
+      sleeping: readSleeping((world as PhysicsWorldSettings).sleeping, fallback.world.sleeping),
+      ccd: readCcd((world as PhysicsWorldSettings).ccd, fallback.world.ccd),
+      pairs: readPairs((world as PhysicsWorldSettings).pairs, fallback.world.pairs),
+    },
   }
 }
 
+export function readPhysicsState(): PhysicsState {
+  return copyPhysicsState(readSettings().physics)
+}
+
 export function writePhysicsState(state: PhysicsState): void {
-  if (typeof localStorage === 'undefined') return
-  localStorage.setItem(PHYSICS_KEY, JSON.stringify(copyPhysicsState(state)))
+  const current = readSettings()
+  writeSettings({ ...current, physics: copyPhysicsState(state) })
 }
 
 /** True when this boot should import PhysicsModule. */

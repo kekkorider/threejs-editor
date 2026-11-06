@@ -15,14 +15,14 @@ const visible = computed(() => {
 
 <template>
   <Section v-if="node && visible && node.kind !== 'WorldEnvironment'" title="Visibility" section-key="visibility">
+    <PropRow v-if="node.castShadow !== null && !node.hasGeometry" label="Cast Shadow" :reset="() => store.resetCastShadow(node.id)">
+      <label class="check">
+        <input type="checkbox" :checked="node.castShadow" @change="store.setCastShadow(node.id, ($event.target as HTMLInputElement).checked)" />
+      </label>
+    </PropRow>
     <PropRow label="Visible" :reset="() => store.resetVisible(node.id)">
       <label class="check">
         <input type="checkbox" :checked="node.visible" @change="store.setVisible(node.id, ($event.target as HTMLInputElement).checked)" />
-      </label>
-    </PropRow>
-    <PropRow v-if="node.castShadow !== null" label="Cast Shadow" :reset="() => store.resetCastShadow(node.id)">
-      <label class="check">
-        <input type="checkbox" :checked="node.castShadow" @change="store.setCastShadow(node.id, ($event.target as HTMLInputElement).checked)" />
       </label>
     </PropRow>
     <PropRow v-if="node.receiveShadow !== null" label="Receive Shadow" :reset="() => store.resetReceiveShadow(node.id)">
