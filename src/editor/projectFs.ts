@@ -20,11 +20,28 @@ export interface FsEntry {
   children: FsEntry[]
 }
 
+export interface PanelLayout {
+  left: number
+  right: number
+  bottom: number
+  files: number
+  node: number
+}
+
+export const DEFAULT_PANEL_LAYOUT: PanelLayout = {
+  left: 272,
+  right: 340,
+  bottom: 236,
+  files: 200,
+  node: 280,
+}
+
 export interface ProjectSettings {
   openPath: string
   physics: PhysicsState
   previewSunEnv: PreviewSunEnvState
   globalGroups: GroupRecord[]
+  layout: PanelLayout
 }
 
 export interface MeshFile {
@@ -67,10 +84,11 @@ export function projectReady(): boolean {
 
 export function defaultProjectSettings(): ProjectSettings {
   return {
-    openPath: 'res://World.tscn',
+    openPath: 'res://World.json',
     physics: defaultPhysicsState(),
     previewSunEnv: defaultPreviewSunEnvState(),
     globalGroups: [],
+    layout: { ...DEFAULT_PANEL_LAYOUT },
   }
 }
 
@@ -85,6 +103,7 @@ export function readSettings(): ProjectSettings {
       environment: { ...settings.previewSunEnv.environment },
     },
     globalGroups: settings.globalGroups.map((record) => ({ ...record })),
+    layout: { ...settings.layout },
   }
 }
 
@@ -99,8 +118,14 @@ export function writeSettings(next: ProjectSettings): void {
       environment: { ...next.previewSunEnv.environment },
     },
     globalGroups: next.globalGroups.map((record) => ({ ...record })),
+    layout: { ...next.layout },
   }
   writeText(SETTINGS_PATH, `${JSON.stringify(settings, null, 2)}\n`)
+}
+
+export function writePanelLayout(layout: PanelLayout): void {
+  const current = readSettings()
+  writeSettings({ ...current, layout: clampLayout(layout) })
 }
 
 export function ensureProject(): Promise<void> {
@@ -136,6 +161,14 @@ export function isMeshFile(path: string): boolean {
 /** Material resource. The File system shows the name without `.json`. */
 export function isMaterialFile(path: string): boolean {
   return path.startsWith('res://materials/') && path.endsWith('.json')
+}
+
+/** Scene file. `settings.json` and resource folders are not scenes. */
+export function isScenePath(path: string): boolean {
+  return path.endsWith('.json')
+    && path !== SETTINGS_PATH
+    && !isMeshFile(path)
+    && !isMaterialFile(path)
 }
 
 export function adoptSettingsFromCache(): void {
@@ -237,7 +270,7 @@ export function duplicatePath(path: string): string | null {
   const text = files.get(path)
   if (text === undefined) return null
   const next = uniqueCopyPath(path)
-  const body = path.endsWith('.tscn') ? text.replaceAll(`"${path}"`, `"${next}"`) : text
+  const body = isScenePath(path) ? text.replaceAll(`"${path}"`, `"${next}"`) : text
   writeText(next, body)
   return next
 }
@@ -245,7 +278,7 @@ export function duplicatePath(path: string): string | null {
 export function rewriteReferences(from: string, to: string): string[] {
   const dirty: string[] = []
   for (const [path, text] of files) {
-    if (!path.endsWith('.tscn') && path !== SETTINGS_PATH) continue
+    if (!path.endsWith('.json') && !path.endsWith('.tscn')) continue
     const next = text.replaceAll(`"${from}"`, `"${to}"`).replaceAll(`"${from}/`, `"${to}/`)
     if (next === text) continue
     files.set(path, next)
@@ -367,6 +400,10 @@ function migrateLegacyResources(): void {
       if (path !== next && !files.has(next) && !directories.has(next)) movePath(path, next)
     }
   }
+  for (const path of [...files.keys()].filter((item) => item.endsWith('.tscn'))) {
+    const next = `${path.slice(0, -'.tscn'.length)}.json`
+    if (!files.has(next) && !directories.has(next)) movePath(path, next)
+  }
 }
 
 async function boot(): Promise<void> {
@@ -382,7 +419,8 @@ async function boot(): Promise<void> {
   if (legacy.preview) next.previewSunEnv = previewFromUnknown(legacy.preview)
   if (legacy.groups) next.globalGroups = groupsFromUnknown(legacy.groups)
   if (legacy.openPath && hasPath(legacy.openPath)) next.openPath = legacy.openPath
-  else if (!hadSettings && hasPath('res://World.tscn')) next.openPath = 'res://World.tscn'
+  else if (!hadSettings && hasPath('res://World.json')) next.openPath = 'res://World.json'
+  if (next.openPath.endsWith('.tscn')) next.openPath = `${next.openPath.slice(0, -'.tscn'.length)}.json`
   if (!hadSettings || legacy.physics || legacy.preview || legacy.groups) writeSettings(next)
   else settings = next
   seed.clearLegacy()
@@ -392,7 +430,7 @@ async function boot(): Promise<void> {
 }
 
 function hasSceneFile(): boolean {
-  return [...files.keys()].some((path) => path.endsWith('.tscn'))
+  return [...files.keys()].some((path) => isScenePath(path))
 }
 
 function hasPath(path: string): boolean {
@@ -548,6 +586,33 @@ function uniqueCopyPath(path: string): string {
   return uniqueFilePath(dir, `${stem}Copy`, ext)
 }
 
+function clampLayout(layout: PanelLayout): PanelLayout {
+  const fallback = DEFAULT_PANEL_LAYOUT
+  const number = (value: number, spare: number, min: number, max: number) => {
+    if (!Number.isFinite(value)) return spare
+    return Math.min(max, Math.max(min, Math.round(value)))
+  }
+  return {
+    left: number(layout.left, fallback.left, 180, 520),
+    right: number(layout.right, fallback.right, 220, 560),
+    bottom: number(layout.bottom, fallback.bottom, 120, 520),
+    files: number(layout.files, fallback.files, 90, 420),
+    node: number(layout.node, fallback.node, 120, 2000),
+  }
+}
+
+function layoutFromUnknown(value: unknown): PanelLayout {
+  const fallback = DEFAULT_PANEL_LAYOUT
+  const source = value && typeof value === 'object' ? value as Partial<PanelLayout> : {}
+  return clampLayout({
+    left: typeof source.left === 'number' ? source.left : fallback.left,
+    right: typeof source.right === 'number' ? source.right : fallback.right,
+    bottom: typeof source.bottom === 'number' ? source.bottom : fallback.bottom,
+    files: typeof source.files === 'number' ? source.files : fallback.files,
+    node: typeof source.node === 'number' ? source.node : fallback.node,
+  })
+}
+
 function parseSettings(text: string): ProjectSettings {
   const fallback = defaultProjectSettings()
   try {
@@ -560,6 +625,7 @@ function parseSettings(text: string): ProjectSettings {
       physics: physicsFromUnknown(parsed.physics),
       previewSunEnv: previewFromUnknown(parsed.previewSunEnv),
       globalGroups: groupsFromUnknown(parsed.globalGroups),
+      layout: layoutFromUnknown((parsed as { layout?: unknown }).layout),
     }
   } catch {
     return fallback

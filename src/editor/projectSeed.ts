@@ -66,7 +66,7 @@ export function migrateScenes(raw: string, openPath: string | null): void {
   if (openPath) rememberOpenPath(openPath)
 }
 
-/** First project: World.tscn, the starter meshes and materials, and Spin.ts. */
+/** First project: World.json, the starter meshes and materials, and Spin.ts. */
 export function seedStarter(): void {
   const floorParams = { ...defaultParams('box'), width: 10, height: 0.5, depth: 10 }
   const cubeParams = defaultParams('box')
@@ -74,7 +74,7 @@ export function seedStarter(): void {
   const flags = { ...DEFAULT_FLAGS }
   const file: SceneFile = {
     version: 1,
-    path: 'res://World.tscn',
+    path: 'res://World.json',
     scene: {
       background: '#3a3a3a',
       backgroundIntensity: 1,

@@ -13,7 +13,7 @@ When a feature lands, move it from **Not yet** into **Already in place**. Do not
 - Top menus: Scene, Project, Debug, Editor, Help.
 - Docks: Scene tree, File system, Inspector, Script, and a bottom panel with TSL and Output.
 - Screens: 3D, Script, Game, AssetLib. The 2D screen was removed on purpose. Everything in this editor is 3D.
-- Draggable splitters. Dragging the File system splitter upward makes that dock taller. Dragging the Script splitter upward makes that dock taller.
+- Draggable splitters. Dragging the File system splitter upward makes that dock taller. Dragging the Node splitter upward makes that dock taller. The sizes are saved in `settings.json`.
 - Create Node dialog, grouped as Node, Mesh, Camera, and Light.
 - Right-click menus on the scene tree and on inspector values.
 
@@ -61,7 +61,7 @@ When a feature lands, move it from **Not yet** into **Already in place**. Do not
 ### Scene file
 
 - Save Scene and Load Scene write the node tree, transforms, geometry, materials, light settings, camera settings, each WorldEnvironment, component parameters, and the grid. The scene block still stores the active environment, so a file from before WorldEnvironment nodes existed gains one on load. Saving after the last WorldEnvironment is removed leaves the viewport on the default environment. Ctrl+Shift+S saves the open scene, and Ctrl+Shift+L loads it. The scene tab shows `(*)` until that save.
-- The File system lists saved scenes. The open scene uses that path (`res://World.tscn` until Save Scene As), and the scene tab shows the same file. Ctrl+Alt+S saves to another `res://` path. Click a scene file to open it. An unsaved scene asks before it is replaced.
+- The File system lists saved scenes. The open scene uses that path (`res://World.json` until Save Scene As), and the scene tab shows the same file. Ctrl+Alt+S saves to another `res://` path. Click a scene file to open it. An unsaved scene asks before it is replaced.
 - Drag a saved scene onto a node, or choose Scene → Instance Scene (Ctrl+Shift+A), to place it as a child. The instance stays linked to that scene. Make Local copies the nodes into the open scene. A scene cannot instance itself or a scene that instances it.
 
 ### Project files
@@ -70,7 +70,7 @@ When a feature lands, move it from **Not yet** into **Already in place**. Do not
 - The File system dock shows that folder as a tree. A row shows the file name. The tooltip shows the `res://` path.
 - New Folder, Rename, Duplicate, and Delete work from the dock. Drag a file or folder onto a folder to move it. The open scene cannot be deleted. `settings.json` cannot be deleted.
 - A change in the folder updates the dock. An external change does not reload a scene that still shows `(*)`.
-- A scene is a `*.tscn` file. A mesh is `meshes/Name.json`. A material is `materials/Name.json`. The File system row shows `Name` for both. A component is `components/*.ts`. The scene stores the mesh and material paths and does not embed those resources. Save Scene writes the files. Create, Make Unique, rename, and delete write the file at once. Apply writes the component file at once. Double-click a JSON file to edit it in the Script screen. A single click selects a component file. Double-click opens it in the Script screen. Renaming a component file renames that component in the scene tree. Shift and Ctrl select file rows the same way they select scene nodes. Undo and redo include file create, rename, move, duplicate, and delete.
+- A scene is `Name.json`. The File system row shows `Name`. A mesh is `meshes/Name.json`. A material is `materials/Name.json`. The File system row shows `Name` for those too. A component is `components/*.ts`. The scene stores the mesh and material paths and does not embed those resources. Save Scene writes the files. Create, Make Unique, rename, and delete write the file at once. Apply writes the component file at once. Double-click a JSON file to edit it in the Script screen. A single click selects a component file. Double-click opens it in the Script screen. Renaming a component file renames that component in the scene tree. Shift and Ctrl select file rows the same way they select scene nodes. Undo and redo include file create, rename, move, duplicate, and delete. Panel sizes are stored in `settings.json` when a splitter is released.
 - `res://settings.json` stores the open scene path, physics, the preview sun, the preview environment, and global groups. The editor creates it with the defaults when it is missing. Scenes and these settings are not stored in browser storage. If the folder has no scene and the browser still has older saved scenes, the editor copies those scenes into the folder once.
 
 ### Resources

@@ -579,7 +579,7 @@ export class EditorState {
     }
     const normalized = normalizeScenePath(path)
     if (!normalized) {
-      this.log('Use a scene path like res://Name.tscn.', 'warn')
+      this.log('Use a scene path like res://Name.json.', 'warn')
       return false
     }
     this.scenePath = normalized
@@ -650,7 +650,7 @@ export class EditorState {
     }
     const parent = this.parentOrSelected(parentId)
     const object = new THREE.Group()
-    object.name = this.uniqueName(sceneFileName(path).replace(/\.tscn$/, '') || 'Scene')
+    object.name = this.uniqueName(sceneFileName(path).replace(/\.json$/, '') || 'Scene')
     parent.object.add(object)
     const node = this.addNode(object, parent.id, 'Node3D', false, { silent: true })
     node.instancePath = path

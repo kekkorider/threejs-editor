@@ -157,7 +157,7 @@
 .scene-dock { flex: 1 1 auto; }
 .files-dock { height: var(--files); flex: none; }
 .inspector-dock { flex: 1; }
-.node-dock { flex: 1 1 var(--node); min-height: 140px; overflow: hidden; }
+.node-dock { height: var(--node); flex: none; overflow: hidden; }
 
 .dock-title {
   height: 26px;

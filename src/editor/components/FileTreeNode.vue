@@ -6,7 +6,7 @@ export default { name: 'FileTreeNode' }
 import { computed, ref } from 'vue'
 import { COMPONENT_DRAG_PREFIX, markScriptDrag } from '../behaviors'
 import { writeSceneDrag } from '../sceneFile'
-import { isMaterialFile, isMeshFile, PROJECT_DRAG_TYPE, RESOURCE_DRAG_TYPE, type FsEntry } from '../projectFs'
+import { isMaterialFile, isMeshFile, isScenePath, PROJECT_DRAG_TYPE, RESOURCE_DRAG_TYPE, type FsEntry } from '../projectFs'
 import Icon from './Icon.vue'
 import { useEditorStore } from '../stores/editor'
 
@@ -26,7 +26,7 @@ function matches(entry: FsEntry, query: string): boolean {
 
 function iconName(entry: FsEntry): string {
   if (entry.kind === 'dir') return 'folder'
-  if (entry.path.endsWith('.tscn')) return 'scene'
+  if (isScenePath(entry.path)) return 'scene'
   if (isMeshFile(entry.path)) return 'meshfile'
   if (isMaterialFile(entry.path)) return 'material'
   if (entry.path.endsWith('.ts')) return 'component'
@@ -35,7 +35,7 @@ function iconName(entry: FsEntry): string {
 
 function iconClass(entry: FsEntry): string {
   if (entry.kind === 'dir') return 'folder'
-  if (entry.path.endsWith('.tscn')) return 'scene'
+  if (isScenePath(entry.path)) return 'scene'
   if (isMeshFile(entry.path)) return 'mesh'
   if (isMaterialFile(entry.path)) return 'mat'
   if (entry.path.endsWith('.ts')) return 'component'
@@ -43,9 +43,9 @@ function iconClass(entry: FsEntry): string {
 }
 
 function displayName(entry: FsEntry): string {
-  if ((isMeshFile(entry.path) || isMaterialFile(entry.path)) && entry.name.endsWith('.json')) {
-    return entry.name.slice(0, -'.json'.length)
-  }
+  const hide = (isMeshFile(entry.path) || isMaterialFile(entry.path) || isScenePath(entry.path))
+    && entry.name.endsWith('.json')
+  if (hide) return entry.name.slice(0, -'.json'.length)
   return entry.name
 }
 
@@ -57,7 +57,7 @@ function onDrag(event: DragEvent): void {
   if (isMeshFile(props.entry.path) || isMaterialFile(props.entry.path)) {
     event.dataTransfer.setData(RESOURCE_DRAG_TYPE, props.entry.path)
   }
-  if (props.entry.path.endsWith('.tscn') && props.entry.path !== store.scenePath) {
+  if (isScenePath(props.entry.path) && props.entry.path !== store.scenePath) {
     writeSceneDrag(event.dataTransfer, props.entry.path)
   }
   const component = store.componentFiles.find((file) => file.path === props.entry.path)

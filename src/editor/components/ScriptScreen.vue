@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { fileNameOf, isMeshFile, isMaterialFile } from '../projectFs'
+import { fileNameOf, isMeshFile, isScenePath } from '../projectFs'
 import { useEditorStore } from '../stores/editor'
 import CodeEditor from './CodeEditor.vue'
 import Icon from './Icon.vue'
@@ -11,8 +11,20 @@ const jsonOpen = computed(() => store.editorKind === 'json' && !!store.jsonPath)
 
 function label(path: string): string {
   const name = fileNameOf(path)
-  if ((isMeshFile(path) || isMaterialFile(path)) && name.endsWith('.json')) return name.slice(0, -'.json'.length)
+  if (name.endsWith('.json') && path !== 'res://settings.json') return name.slice(0, -'.json'.length)
   return name
+}
+
+function iconName(path: string): string {
+  if (isMeshFile(path)) return 'meshfile'
+  if (isScenePath(path)) return 'scene'
+  return 'material'
+}
+
+function iconClass(path: string): string {
+  if (isMeshFile(path)) return 'mesh'
+  if (isScenePath(path)) return 'scene'
+  return 'mat'
 }
 </script>
 
@@ -43,7 +55,7 @@ function label(path: string): string {
           :title="path"
           @click="store.showJsonDoc(path)"
         >
-          <span class="kind-icon" :class="isMeshFile(path) ? 'mesh' : 'mat'"><Icon :name="isMeshFile(path) ? 'meshfile' : 'material'" /></span>
+          <span class="kind-icon" :class="iconClass(path)"><Icon :name="iconName(path)" /></span>
           <span class="label">{{ label(path) }}</span>
           <button type="button" class="icon-btn row-close" title="Close" @click.stop="store.closeJsonDoc(path)">
             <Icon name="close" />

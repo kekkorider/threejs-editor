@@ -28,6 +28,7 @@ import {
   hasEntry,
   isMeshFile,
   isMaterialFile,
+  isScenePath,
   joinRes,
   mkdirPath,
   movePath,
@@ -296,7 +297,7 @@ export const useEditorStore = defineStore('editor', () => {
   const sceneDirty = ref(true)
   const sceneSaved = ref(false)
   const sceneDialog = ref<'' | 'save-as' | 'unsaved' | 'instance'>('')
-  const sceneDialogPath = ref('res://NewScene.tscn')
+  const sceneDialogPath = ref('res://NewScene.json')
   const sceneDialogError = ref('')
   const pendingScenePath = ref('')
   const metaName = ref('')
@@ -1815,9 +1816,9 @@ export const useEditorStore = defineStore('editor', () => {
     createOpen.value = false
     componentOpen.value = false
     const current = engine.scenePath
-    const name = sceneFileName(current).replace(/\.tscn$/, '') || 'Scene'
+    const name = sceneFileName(current).replace(/\.json$/, '') || 'Scene'
     const folder = current.slice(0, current.length - sceneFileName(current).length)
-    sceneDialogPath.value = `${folder}${name}2.tscn`
+    sceneDialogPath.value = `${folder}${name}2.json`
     sceneDialogError.value = ''
     sceneDialog.value = 'save-as'
   }
@@ -3144,7 +3145,7 @@ export const useEditorStore = defineStore('editor', () => {
       touch()
       return
     }
-    if (path.endsWith('.tscn')) {
+    if (isScenePath(path)) {
       deleteSceneFile(path)
       refreshProjectTree()
       return
@@ -3199,7 +3200,7 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   function activateProjectPath(path: string): void {
-    if (path.endsWith('.tscn')) openSceneFile(path)
+    if (isScenePath(path)) openSceneFile(path)
   }
 
   function editProjectPath(path: string): void {
@@ -3266,7 +3267,7 @@ export const useEditorStore = defineStore('editor', () => {
       engine.log('The open scene stays in the File system.', 'warn')
       return
     }
-    if (path.endsWith('.tscn')) {
+    if (isScenePath(path)) {
       const removed = engine.deleteScene(path)
       if (!removed) bottomTab.value = 'output'
       return

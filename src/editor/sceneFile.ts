@@ -7,6 +7,7 @@ import type { GridSettings, LightDefaults, NodeKind, SceneSettings, ShadowTypeNa
 import { isBodySettings, type BodySettings } from './physicsBody'
 import {
   fileStem,
+  isScenePath,
   readCached,
   readSettings,
   removePath,
@@ -20,7 +21,7 @@ import {
 import type { MaterialSide } from './tsl'
 
 /** Scene that opens when the project has no saved scene yet. */
-export const OPEN_SCENE_PATH = 'res://World.tscn'
+export const OPEN_SCENE_PATH = 'res://World.json'
 
 export interface SceneComponentRecord {
   name: string
@@ -147,14 +148,15 @@ export function sceneFileName(path: string): string {
   return slash === -1 ? path : path.slice(slash + 1)
 }
 
-/** Accept `Name`, `Name.tscn`, or `res://folder/Name.tscn`. */
+/** Accept `Name`, `Name.json`, or `res://folder/Name.json`. A `.tscn` suffix becomes `.json`. */
 export function normalizeScenePath(input: string): string | null {
   let path = input.trim().replace(/\\/g, '/')
   if (!path) return null
   if (!path.startsWith('res://')) path = `res://${path.replace(/^\/+/, '')}`
-  if (!path.endsWith('.tscn')) path += '.tscn'
+  if (path.endsWith('.tscn')) path = `${path.slice(0, -'.tscn'.length)}.json`
+  if (!path.endsWith('.json')) path += '.json'
   if (path.includes('..')) return null
-  if (!/^res:\/\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.tscn$/.test(path)) return null
+  if (!/^res:\/\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.json$/.test(path)) return null
   return path
 }
 
@@ -184,7 +186,7 @@ export function removeSceneFile(path: string): void {
 export function readSceneLibrary(): SceneFile[] {
   const library: SceneFile[] = []
   for (const path of projectPaths()) {
-    if (!path.endsWith('.tscn')) continue
+    if (!isScenePath(path)) continue
     const text = readCached(path)
     if (!text) continue
     try {

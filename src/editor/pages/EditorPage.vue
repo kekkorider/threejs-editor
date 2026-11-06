@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, reactive } from 'vue'
+import { readSettings, writePanelLayout } from '../projectFs'
 import AssetLibrary from '../components/AssetLibrary.vue'
 import BottomPanel from '../components/BottomPanel.vue'
 import ComponentWarning from '../components/ComponentWarning.vue'
@@ -22,7 +23,7 @@ import { useEditorStore } from '../stores/editor'
 import '../editor.css'
 
 const store = useEditorStore()
-const metrics = reactive({ left: 272, right: 340, bottom: 236, files: 200, node: 280 })
+const metrics = reactive({ ...readSettings().layout })
 
 function styleVars(): Record<string, string> {
   return {
@@ -38,6 +39,20 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
 
+function saveLayout(): void {
+  writePanelLayout({
+    left: metrics.left,
+    right: metrics.right,
+    bottom: metrics.bottom,
+    files: metrics.files,
+    node: metrics.node,
+  })
+}
+
+function nodeMax(): number {
+  return Math.max(160, window.innerHeight - 180)
+}
+
 function onSplit(event: PointerEvent, axis: 'x' | 'y', apply: (delta: number) => void): void {
   if (event.button !== 0) return
   event.preventDefault()
@@ -51,6 +66,7 @@ function onSplit(event: PointerEvent, axis: 'x' | 'y', apply: (delta: number) =>
     window.removeEventListener('pointermove', move)
     window.removeEventListener('pointerup', up)
     document.body.style.cursor = ''
+    saveLayout()
   }
   document.body.style.cursor = axis === 'x' ? 'col-resize' : 'row-resize'
   window.addEventListener('pointermove', move)
@@ -130,7 +146,7 @@ onBeforeUnmount(() => {
         <InspectorDock />
         <div
           class="splitter h"
-          @pointerdown="onSplit($event, 'y', (delta) => { metrics.node = clamp(metrics.node - delta, 140, 520) })"
+          @pointerdown="onSplit($event, 'y', (delta) => { metrics.node = clamp(metrics.node - delta, 120, nodeMax()) })"
         />
         <NodeDock />
       </aside>
