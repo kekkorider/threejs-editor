@@ -22,6 +22,7 @@ import { OrbitControlsModule } from './modules/OrbitControls'
 import { InspectorModule } from './modules/Inspector'
 import { InputModule } from './modules/Input'
 import { physicsEnabled, readPhysicsState } from '../editor/physicsSettings'
+import { ensureProject } from '../editor/projectFs'
 
 import { ScaleMaterial } from './materials/scale'
 import { Spin } from './behaviors/Spin'
@@ -81,6 +82,7 @@ function remountScene(container: HTMLDivElement): void {
 }
 
 async function bootOnce(container: HTMLDivElement): Promise<void> {
+await ensureProject()
 if (physicsEnabled()) {
   const { PhysicsModule } = await import('./modules/Physics')
   starter.addModules({ physics: new PhysicsModule(readPhysicsState().world) })

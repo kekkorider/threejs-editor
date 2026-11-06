@@ -4,6 +4,7 @@ import { GEOMETRY_CATALOG, geometryEntry, type GeometryType, type ParamSpec } fr
 import { formatNumber } from '../../lib/format'
 import { useEditorStore } from '../../stores/editor'
 import PropRow from './PropRow.vue'
+import ResourceSlot from './ResourceSlot.vue'
 import Section from './Section.vue'
 
 const store = useEditorStore()
@@ -39,9 +40,14 @@ function openMenu(event: MouseEvent): void {
 </script>
 
 <template>
-  <Section v-if="node?.hasGeometry" title="Geometry" section-key="geometry" tone="sub mesh">
+  <Section v-if="node?.hasGeometry" title="Mesh" section-key="mesh" tone="sub mesh">
     <PropRow label="Mesh">
-      <button type="button" class="resource-btn" @click="openMenu">{{ geometry?.name ?? 'Imported' }}</button>
+      <ResourceSlot
+        :path="geometry?.path ?? null"
+        accept=".tres"
+        @click="openMenu"
+        @drop-path="store.assignMeshFile(node.id, $event)"
+      />
     </PropRow>
     <template v-if="geometry">
       <PropRow label="Type" :reset="() => node && store.resetGeometryType(node.id)">

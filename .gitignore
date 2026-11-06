@@ -28,3 +28,6 @@ public/draco/*
 
 public/basis/*
 !public/basis/.gitkeep
+
+# Project files created the first time the editor runs.
+/threejs-editor/

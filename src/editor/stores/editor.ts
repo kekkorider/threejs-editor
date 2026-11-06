@@ -21,6 +21,21 @@ import { kindClass, kindIcon } from '../lib/format'
 import { COMPONENT_DRAG_PREFIX, INSTANCE_DRAG_PREFIX, type ComponentParameter } from '../behaviors'
 import { EditorHistory, sameScene, type HistoryRow, type SelectionBookmark } from '../history'
 import { hasSceneFile, normalizeScenePath, readSceneLibrary, sceneFileName, type SceneFile } from '../sceneFile'
+import {
+  duplicatePath,
+  fileNameOf,
+  hasEntry,
+  joinRes,
+  mkdirPath,
+  movePath,
+  parentPath,
+  removePath,
+  SETTINGS_PATH,
+  snapshotTree,
+  subscribe as subscribeProject,
+  uniqueDirectory,
+  type FsEntry,
+} from '../projectFs'
 import { DEFAULT_FLAGS, TSL_PRESETS, matchingPresetId, type MaterialSide } from '../tsl'
 import { setViewportShading } from '../../webgl'
 import {
@@ -117,10 +132,12 @@ export interface InspectorView {
     type: GeometryType
     params: Record<string, number>
     users: number
+    path: string
   } | null
   material: {
     id: string
     name: string
+    path: string
     side: MaterialSide
     transparent: boolean
     wireframe: boolean
@@ -179,6 +196,16 @@ export interface PopupState {
 
 const MENUS = ['Scene', 'Project', 'Debug', 'Editor', 'Help'] as const
 
+function directoryPaths(entries: FsEntry[]): Set<string> {
+  const paths = new Set<string>()
+  for (const entry of entries) {
+    if (entry.kind !== 'dir') continue
+    paths.add(entry.path)
+    for (const path of directoryPaths(entry.children)) paths.add(path)
+  }
+  return paths
+}
+
 export const useEditorStore = defineStore('editor', () => {
   const engine = markRaw(new EditorState())
   const revision = ref(0)
@@ -205,6 +232,9 @@ export const useEditorStore = defineStore('editor', () => {
   const logs = shallowRef<LogLine[]>([])
   const sceneFilter = ref('')
   const fileFilter = ref('')
+  const projectTree = ref<FsEntry[]>(snapshotTree())
+  const renamingFile = ref<string | null>(null)
+  const expandedFiles = ref(directoryPaths(snapshotTree()))
   const inspectorFilter = ref('')
   const expanded = ref(new Set<string>())
   const collapsed = ref(new Set<string>())
@@ -318,7 +348,7 @@ export const useEditorStore = defineStore('editor', () => {
         name: resource.name,
         source: resource.source,
         builtin: resource.builtin,
-        path: `res://components/${resource.name}.ts`,
+        path: resource.path,
       }))
       .sort((a, b) => a.name.localeCompare(b.name))
   })
@@ -336,7 +366,7 @@ export const useEditorStore = defineStore('editor', () => {
         nodeId: instance.nodeId,
         enabled: instance.behaviour.enabled,
         builtin: resource.builtin,
-        path: `res://components/${resource.name}.ts`,
+        path: resource.path,
         nodeName: engine.nodes.get(instance.nodeId)?.name ?? '',
         parameters: engine.parametersOf(instance.id),
       })
@@ -493,12 +523,14 @@ export const useEditorStore = defineStore('editor', () => {
             type: geometry.type,
             params: { ...geometry.params },
             users: engine.usersOfGeometry(geometry.id).length,
+            path: geometry.path,
           }
         : null,
       material: material
         ? {
             id: material.id,
             name: material.name,
+            path: material.path,
             side: material.side,
             transparent: material.transparent,
             wireframe: material.wireframe,
@@ -2029,7 +2061,7 @@ export const useEditorStore = defineStore('editor', () => {
         id,
         resourceId: resource.id,
         name: resource.name,
-        path: `res://components/${resource.name}.ts`,
+        path: resource.path,
       }]
     })
     const counts = new Map<string, number>()
@@ -2365,6 +2397,30 @@ export const useEditorStore = defineStore('editor', () => {
     bottomTab.value = 'tsl'
   }
 
+  function assignMeshFile(nodeId: string, path: string): void {
+    record(`Mesh ${nodeLabel(nodeId)}`, () => {
+      engine.assignGeometryPath(nodeId, path)
+    }, { merge: false })
+  }
+
+  function assignMaterialFile(nodeId: string, path: string): void {
+    record(`Material ${nodeLabel(nodeId)}`, () => {
+      engine.assignMaterialPath(nodeId, path)
+    }, { material: true, merge: false })
+  }
+
+  function selectMaterialPath(path: string): void {
+    const id = engine.focusMaterialFile(path)
+    if (id) selectMaterialFile(id)
+    else touch()
+  }
+
+  function selectGeometryPath(path: string): void {
+    const id = engine.focusGeometryFile(path)
+    if (id) selectGeometryFile(id)
+    else touch()
+  }
+
   function selectGeometryFile(id: string): void {
     const user = engine.usersOfGeometry(id)[0]
     if (user) select(user.id)
@@ -2562,6 +2618,14 @@ export const useEditorStore = defineStore('editor', () => {
           }, { merge: false })
         },
       })
+      items.push({
+        label: 'Clear',
+        action: () => {
+          record(`Clear Mesh ${nodeLabel(nodeId)}`, () => {
+            engine.clearGeometry(nodeId)
+          }, { merge: false })
+        },
+      })
       for (const resource of engine.geometries.values()) {
         if (resource.id === current.id) continue
         items.push({
@@ -2595,6 +2659,14 @@ export const useEditorStore = defineStore('editor', () => {
         action: () => {
           record(`Unique Material ${nodeLabel(nodeId)}`, () => {
             engine.makeMaterialUnique(nodeId)
+          }, { material: true, merge: false })
+        },
+      })
+      items.push({
+        label: 'Clear',
+        action: () => {
+          record(`Clear Material ${nodeLabel(nodeId)}`, () => {
+            engine.clearMaterial(nodeId)
           }, { material: true, merge: false })
         },
       })
@@ -2898,6 +2970,141 @@ export const useEditorStore = defineStore('editor', () => {
     } else if (event.key === 'Escape' && screen.value === 'game') setPlaying(false)
   }
 
+  function refreshProjectTree(): void {
+    projectTree.value = snapshotTree()
+    touch()
+  }
+
+  function findProjectEntry(entries: FsEntry[], path: string): FsEntry | null {
+    for (const entry of entries) {
+      if (entry.path === path) return entry
+      const nested = findProjectEntry(entry.children, path)
+      if (nested) return nested
+    }
+    return null
+  }
+
+  function createProjectFolder(parent = 'res://'): void {
+    const path = uniqueDirectory(parent, 'NewFolder')
+    mkdirPath(path)
+    expandedFiles.value = new Set(expandedFiles.value).add(parent === 'res://' ? path : parent)
+    renamingFile.value = path
+    refreshProjectTree()
+  }
+
+  function toggleProjectFolder(path: string): void {
+    const next = new Set(expandedFiles.value)
+    if (next.has(path)) next.delete(path)
+    else next.add(path)
+    expandedFiles.value = next
+  }
+
+  function beginFileRename(path: string): void {
+    renamingFile.value = path
+  }
+
+  function commitFileRename(raw: string): void {
+    const from = renamingFile.value
+    renamingFile.value = null
+    if (!from) return
+    const cleaned = raw.trim().replace(/[\\/]/g, '')
+    if (!cleaned || cleaned === '.' || cleaned === '..') return
+    const entry = findProjectEntry(projectTree.value, from)
+    if (!entry) return
+    let name = cleaned
+    if (entry.kind === 'file') {
+      const current = fileNameOf(from)
+      const dot = current.lastIndexOf('.')
+      const ext = dot === -1 ? '' : current.slice(dot)
+      if (ext && !name.endsWith(ext)) name += ext
+    }
+    const next = joinRes(parentPath(from), name)
+    if (next === from) return
+    if (hasEntry(next)) {
+      engine.log(`${next} already exists.`, 'warn')
+      touch()
+      return
+    }
+    movePath(from, next)
+    engine.retargetProjectPath(from, next)
+    refreshProjectTree()
+  }
+
+  function duplicateProjectPath(path: string): void {
+    const next = duplicatePath(path)
+    if (!next) return
+    if (next.endsWith('.ts')) engine.syncComponentFile(next)
+    refreshProjectTree()
+  }
+
+  function deleteProjectPath(path: string): void {
+    if (path === SETTINGS_PATH) {
+      engine.log('settings.json stays in the project.', 'warn')
+      touch()
+      return
+    }
+    if (path === engine.scenePath || engine.scenePath.startsWith(`${path}/`)) {
+      engine.log('The open scene stays in the File system.', 'warn')
+      touch()
+      return
+    }
+    if (path.endsWith('.tscn')) {
+      deleteSceneFile(path)
+      refreshProjectTree()
+      return
+    }
+    if (path.endsWith('.ts')) {
+      const resource = [...engine.components.values()].find((item) => item.path === path)
+      if (resource) {
+        requestDeleteComponent(resource.id)
+        return
+      }
+    }
+    engine.releaseResourcePath(path)
+    removePath(path)
+    refreshProjectTree()
+  }
+
+  function moveProjectEntry(from: string, folder: string): void {
+    if (folder !== 'res://' && (from === folder || folder.startsWith(`${from}/`))) return
+    const next = joinRes(folder, fileNameOf(from))
+    if (next === from) return
+    if (hasEntry(next)) {
+      engine.log(`${next} already exists.`, 'warn')
+      touch()
+      return
+    }
+    movePath(from, next)
+    engine.retargetProjectPath(from, next)
+    expandedFiles.value = new Set(expandedFiles.value).add(folder)
+    refreshProjectTree()
+  }
+
+  function openProjectMenu(path: string, x: number, y: number): void {
+    const entry = findProjectEntry(projectTree.value, path)
+    const items: MenuItem[] = []
+    if (!entry || entry.kind === 'dir') {
+      items.push({ label: 'New Folder', action: () => createProjectFolder(path) })
+    }
+    if (entry) {
+      items.push({ label: 'Rename', action: () => beginFileRename(path) })
+      items.push({ label: 'Duplicate', disabled: entry.kind === 'dir', action: () => duplicateProjectPath(path) })
+      items.push({ label: 'Delete', action: () => deleteProjectPath(path) })
+    }
+    showPopup(new DOMRect(x, y, 0, 0), items, false)
+  }
+
+  subscribeProject((changed) => {
+    projectTree.value = snapshotTree()
+    for (const path of changed) {
+      if (path.endsWith('.ts')) engine.syncComponentFile(path)
+      else if (path.endsWith('.tres') || path.endsWith('.tsl')) {
+        if (!engine.sceneDirty) engine.reloadResourceFile(path)
+      } else if (path === engine.scenePath && !engine.sceneDirty) engine.loadOpenScene()
+    }
+    touch()
+  })
+
   function onPointerDown(event: PointerEvent): void {
     const target = event.target instanceof Element
       ? event.target
@@ -2932,6 +3139,9 @@ export const useEditorStore = defineStore('editor', () => {
     logs,
     sceneFilter,
     fileFilter,
+    projectTree,
+    renamingFile,
+    expandedFiles,
     inspectorFilter,
     expanded,
     collapsed,
@@ -3116,6 +3326,18 @@ export const useEditorStore = defineStore('editor', () => {
     discardAndOpen,
     cancelSceneDialog,
     deleteSceneFile,
+    createProjectFolder,
+    toggleProjectFolder,
+    beginFileRename,
+    commitFileRename,
+    duplicateProjectPath,
+    deleteProjectPath,
+    moveProjectEntry,
+    openProjectMenu,
+    selectMaterialPath,
+    selectGeometryPath,
+    assignMeshFile,
+    assignMaterialFile,
     openInstanceDialog,
     instanceScene,
     makeLocal,

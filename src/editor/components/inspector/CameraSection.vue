@@ -117,29 +117,19 @@ const aspectLocked = computed(() => camera.value?.projection === 'perspective' &
 
 <template>
   <Section
-    v-if="node && camera && sectionOn('Camera', cameraLabels)"
-    title="Camera"
-    section-key="camera"
+    v-if="node && camera && sectionOn('Projection', ['Projection', 'Near', 'Far', 'Zoom'])"
+    title="Projection"
+    section-key="projection"
     tone="sub camera"
   >
-    <PropRow v-if="rowOn('Camera', 'Projection', 'perspective orthographic')" label="Projection" :reset="() => store.resetCamera(node.id, 'projection')">
+    <PropRow v-if="rowOn('Projection', 'Projection', 'perspective orthographic')" label="Projection" :reset="() => store.resetCamera(node.id, 'projection')">
       <select :value="camera.projection" @change="onProjection">
         <option value="perspective">Perspective</option>
         <option value="orthographic">Orthographic</option>
       </select>
     </PropRow>
-    <PropRow v-if="rowOn('Camera', 'Current', 'play')" label="Current" :reset="() => store.resetCamera(node.id, 'current')">
-      <label class="check">
-        <input type="checkbox" :checked="camera.current" @change="writeFlag('current', ($event.target as HTMLInputElement).checked)" />
-      </label>
-    </PropRow>
-    <PropRow v-if="rowOn('Camera', 'Preview', 'look through')" label="Preview">
-      <label class="check">
-        <input type="checkbox" :checked="camera.preview" @change="store.setCameraPreview(node.id, ($event.target as HTMLInputElement).checked)" />
-      </label>
-    </PropRow>
     <PropRow
-      v-for="row in sharedRows.filter((item) => item.field !== 'layers' && rowOn('Camera', item.label, item.extra))"
+      v-for="row in sharedRows.filter((item) => item.field !== 'layers' && rowOn('Projection', item.label, item.extra))"
       :key="row.field"
       :label="row.label"
       scrub
@@ -154,6 +144,24 @@ const aspectLocked = computed(() => camera.value?.projection === 'perspective' &
         :value="formatNumber(readNumber(camera, row.field))"
         @change="writeNumber(row.field, Number(($event.target as HTMLInputElement).value))"
       />
+    </PropRow>
+  </Section>
+
+  <Section
+    v-if="node && camera && sectionOn('Camera', ['Current', 'Preview', 'Sync Viewport', 'Layers'])"
+    title="Camera"
+    section-key="camera"
+    tone="sub camera"
+  >
+    <PropRow v-if="rowOn('Camera', 'Current', 'play')" label="Current" :reset="() => store.resetCamera(node.id, 'current')">
+      <label class="check">
+        <input type="checkbox" :checked="camera.current" @change="writeFlag('current', ($event.target as HTMLInputElement).checked)" />
+      </label>
+    </PropRow>
+    <PropRow v-if="rowOn('Camera', 'Preview', 'look through')" label="Preview">
+      <label class="check">
+        <input type="checkbox" :checked="camera.preview" @change="store.setCameraPreview(node.id, ($event.target as HTMLInputElement).checked)" />
+      </label>
     </PropRow>
     <PropRow v-if="rowOn('Camera', 'Sync Viewport', 'aspect fit width')" label="Sync Viewport" :reset="() => store.resetCamera(node.id, 'syncAspect')">
       <label class="check">

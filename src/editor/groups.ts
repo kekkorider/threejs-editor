@@ -1,5 +1,7 @@
 /** Local groups belong to one scene. Global groups belong to the project. */
 
+import { readSettings, writeSettings } from './projectFs'
+
 export type GroupScope = 'local' | 'global'
 
 export interface GroupRecord {
@@ -62,30 +64,28 @@ export function copyGroupNames(names: readonly string[] | undefined): string[] {
   return next
 }
 
-export function readGlobalGroups(): GroupRecord[] {
-  if (typeof localStorage === 'undefined') return []
-  try {
-    const raw = localStorage.getItem(GLOBAL_GROUPS_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw) as unknown
-    if (!Array.isArray(parsed)) return []
-    const seen = new Set<string>()
-    const records: GroupRecord[] = []
-    for (const item of parsed) {
-      if (!isGroupRecord(item) || seen.has(item.name)) continue
-      seen.add(item.name)
-      records.push({ name: item.name, description: item.description })
-    }
-    return records
-  } catch {
-    return []
+export function groupsFromUnknown(value: unknown): GroupRecord[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  const records: GroupRecord[] = []
+  for (const item of value) {
+    if (!isGroupRecord(item) || seen.has(item.name)) continue
+    seen.add(item.name)
+    records.push({ name: item.name, description: item.description })
   }
+  return records
+}
+
+export function readGlobalGroups(): GroupRecord[] {
+  return readSettings().globalGroups.map((record) => ({ name: record.name, description: record.description }))
 }
 
 export function writeGlobalGroups(records: readonly GroupRecord[]): void {
-  if (typeof localStorage === 'undefined') return
-  const payload = records.map((record) => ({ name: record.name, description: record.description }))
-  localStorage.setItem(GLOBAL_GROUPS_KEY, JSON.stringify(payload))
+  const current = readSettings()
+  writeSettings({
+    ...current,
+    globalGroups: records.map((record) => ({ name: record.name, description: record.description })),
+  })
 }
 
 /** Project global groups plus the local groups of the open scene. */

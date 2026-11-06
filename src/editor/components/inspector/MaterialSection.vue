@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { TSL_PRESETS, type MaterialSide } from '../../tsl'
 import { useEditorStore } from '../../stores/editor'
 import PropRow from './PropRow.vue'
+import ResourceSlot from './ResourceSlot.vue'
 import Section from './Section.vue'
 
 const store = useEditorStore()
@@ -31,9 +32,14 @@ function onName(event: Event): void {
 </script>
 
 <template>
-  <Section v-if="node?.hasGeometry" title="Material" section-key="material" tone="sub mat">
-    <PropRow label="Material">
-      <button type="button" class="resource-btn" @click="openMenu">{{ material?.name ?? 'Empty' }}</button>
+  <Section v-if="node?.hasGeometry" title="Geometry" section-key="geometry" tone="sub mat">
+    <PropRow label="Material Override">
+      <ResourceSlot
+        :path="material?.path ?? null"
+        accept=".tsl"
+        @click="openMenu"
+        @drop-path="store.assignMaterialFile(node.id, $event)"
+      />
     </PropRow>
     <template v-if="material">
       <PropRow label="Name" :reset="() => store.resetMaterialName(material.id)">
@@ -67,6 +73,11 @@ function onName(event: Event): void {
       </PropRow>
       <div v-if="material.error" class="hint">{{ material.error }}</div>
     </template>
+    <PropRow v-if="node.castShadow !== null" label="Cast Shadow" :reset="() => store.resetCastShadow(node.id)">
+      <label class="check">
+        <input type="checkbox" :checked="node.castShadow" @change="store.setCastShadow(node.id, ($event.target as HTMLInputElement).checked)" />
+      </label>
+    </PropRow>
     <div v-else class="hint">Assign a TSL material to drive this surface with Three Shading Language.</div>
   </Section>
 </template>
