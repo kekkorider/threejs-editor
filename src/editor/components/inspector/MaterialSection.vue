@@ -70,7 +70,10 @@ function onName(event: Event): void {
         </label>
       </PropRow>
       <PropRow label="">
-        <button type="button" class="btn" @click="store.bottomTab = 'tsl'">Edit TSL</button>
+        <span class="shader-actions">
+          <button type="button" class="btn" @click="store.openShaderForNode(node.id)">Edit Shader</button>
+          <button type="button" class="btn" @click="store.bottomTab = 'tsl'">Edit TSL</button>
+        </span>
       </PropRow>
       <div v-if="material.error" class="hint">{{ material.error }}</div>
     </template>

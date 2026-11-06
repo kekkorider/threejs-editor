@@ -77,6 +77,7 @@ When a feature lands, move it from **Not yet** into **Already in place**. Do not
 
 - Primitive meshes under `res://meshes`.
 - TSL materials under `res://materials`, with presets (Lit, Metal, UV, Checker, and the others in the create dialog).
+- Edit Shader opens the node editor in its own window. Double-click a material file to open the same window. Each edit applies to every mesh that uses that material. The node graph is stored in the material JSON file. The File system lists that file without `.json`.
 - The starter scene is one 1×1×1 cube at `[0, 0, 0]` with the Lit material.
 
 ### Lighting

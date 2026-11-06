@@ -1056,6 +1056,45 @@
   font-weight: 700;
 }
 
+.shader-window {
+  position: fixed;
+  z-index: 36;
+  width: min(960px, calc(100vw - 24px));
+  height: min(680px, calc(100vh - 24px));
+  display: flex;
+  flex-direction: column;
+  background: #1b1b1b;
+  border: 1px solid #161616;
+  border-radius: 6px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+.shader-title {
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px 0 12px;
+  font-weight: 650;
+  border-bottom: 1px solid #1c1c1c;
+  cursor: move;
+  user-select: none;
+  flex: none;
+}
+.shader-status {
+  margin-left: auto;
+  color: var(--font-mute);
+  font-weight: 500;
+  font-size: 12px;
+}
+.shader-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.shader-frame {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  background: #111;
+}
+
 @media (max-width: 1100px) {
   .editor { --left: 220px; --right: 250px; }
   .screen-btn span { display: none; }

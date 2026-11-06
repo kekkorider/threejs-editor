@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { computed, markRaw, ref, shallowRef } from 'vue'
+import { computed, markRaw, ref, shallowRef, watch } from 'vue'
 import * as THREE from 'three/webgpu'
 import { ThreeContextEvents } from 'three-start'
 import type { ThreeStart } from 'three-start'
@@ -45,6 +45,13 @@ import {
   uniqueDirectory,
   type FsEntry,
 } from '../projectFs'
+import {
+  ShaderGraphClient,
+  graphHasNodes,
+  shaderEditorUrl,
+  type ShaderCodePayload,
+  type ShaderUniformEntry,
+} from '../shaderGraph'
 import { DEFAULT_FLAGS, TSL_PRESETS, matchingPresetId, type MaterialSide } from '../tsl'
 import { setViewportShading } from '../../webgl'
 import {
@@ -238,6 +245,21 @@ export const useEditorStore = defineStore('editor', () => {
   const tslStatus = ref('')
   const tslError = ref(false)
   const tslName = ref('No TSL material')
+  const shaderOpen = ref(false)
+  const shaderMaterialId = ref<string | null>(null)
+  const shaderStatus = ref('')
+  const shaderHost = shallowRef<Window | null>(null)
+  let shaderFollowId: string | null = null
+  let shaderPopupWatch = 0
+  let shaderClient: ShaderGraphClient | null = null
+  let shaderClientHost: Window | null = null
+  let shaderClientFrame: HTMLIFrameElement | null = null
+  let shaderFallbackFrame: HTMLIFrameElement | null = null
+  let shaderToken = 0
+  let shaderAccepting = false
+  let shaderLastGraph = ''
+  let shaderPulling = false
+  let shaderPullAgain = false
   const logs = shallowRef<LogLine[]>([])
   const sceneFilter = ref('')
   const fileFilter = ref('')
@@ -554,7 +576,7 @@ export const useEditorStore = defineStore('editor', () => {
             transparent: material.transparent,
             wireframe: material.wireframe,
             error: material.error,
-            presetId: matchingPresetId(material.source) ?? 'custom',
+            presetId: material.graph ? 'custom' : matchingPresetId(material.source) ?? 'custom',
             users: engine.usersOfMaterial(material.id).length,
           }
         : null,
@@ -590,6 +612,7 @@ export const useEditorStore = defineStore('editor', () => {
     syncMaterial(forceMaterial)
     writeMeta()
     syncDockFromSelection()
+    followShaderSelection()
   }
 
   function nodeLabel(id: string | null | undefined): string {
@@ -864,7 +887,7 @@ export const useEditorStore = defineStore('editor', () => {
   function refreshTslBar(): void {
     const resource = boundMaterialId.value ? engine.materials.get(boundMaterialId.value) : undefined
     tslName.value = resource ? `${resource.name}.tsl` : 'No TSL material'
-    tslPresetId.value = resource ? matchingPresetId(resource.source) ?? 'custom' : 'custom'
+    tslPresetId.value = resource?.graph ? 'custom' : resource ? matchingPresetId(resource.source) ?? 'custom' : 'custom'
     tslError.value = Boolean(resource?.error)
     tslStatus.value = resource?.error ?? (resource ? 'Compiled' : '')
     tslDisabled.value = !resource
@@ -1740,6 +1763,258 @@ export const useEditorStore = defineStore('editor', () => {
       compileTimer = window.setTimeout(() => compileBound(false), 380)
     })
   }
+
+  function shaderTitle(materialId: string): string {
+    return engine.materials.get(materialId)?.name ?? 'Material'
+  }
+
+  function shaderDocId(materialId: string): string {
+    return engine.materials.get(materialId)?.path ?? materialId
+  }
+
+  function shaderGraph(materialId: string): unknown | null {
+    return engine.materials.get(materialId)?.graph ?? null
+  }
+
+  function openShaderPopup(): void {
+    const existing = shaderHost.value
+    if (existing && !existing.closed) {
+      existing.focus()
+      return
+    }
+    const popup = window.open('', 'threejs-shader-editor', 'popup=yes,width=1120,height=780')
+    if (!popup) {
+      shaderHost.value = null
+      return
+    }
+    popup.document.open()
+    popup.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>Shader</title><style>html,body{margin:0;height:100%;background:#111;color:#ddd;font:12px sans-serif}#shader-status{height:22px;line-height:22px;padding:0 8px;background:#1b1b1b;border-bottom:1px solid #333}iframe{border:0;width:100%;height:calc(100% - 23px);display:block}</style></head><body><div id="shader-status">Opening the shader editor.</div><iframe id="shader-frame" title="Shader editor"></iframe></body></html>')
+    popup.document.close()
+    const bridge = popup.document.createElement('script')
+    bridge.textContent = `window.addEventListener('message', function (event) {
+  if (event.source !== window.opener) return
+  var data = event.data
+  if (!data || data.source !== 'tsl-graph-host' || typeof data.type !== 'string') return
+  var frame = document.getElementById('shader-frame')
+  if (!frame || !frame.contentWindow) return
+  frame.contentWindow.postMessage(data, 'https://www.tsl-graph.xyz')
+})`
+    popup.document.body.appendChild(bridge)
+    shaderHost.value = markRaw(popup)
+    const openedAt = Date.now()
+    popup.addEventListener('pagehide', () => {
+      if (Date.now() - openedAt < 400) return
+      if (shaderHost.value === popup) closeShaderEditor()
+    })
+    window.clearInterval(shaderPopupWatch)
+    shaderPopupWatch = window.setInterval(() => {
+      if (!popup.closed) return
+      window.clearInterval(shaderPopupWatch)
+      if (shaderHost.value === popup) closeShaderEditor()
+    }, 400)
+  }
+
+  function shaderFrameElement(): HTMLIFrameElement | null {
+    const host = shaderHost.value
+    if (host && !host.closed) {
+      const node = host.document.getElementById('shader-frame')
+      if (node && node.tagName === 'IFRAME') return node as HTMLIFrameElement
+    }
+    return shaderFallbackFrame
+  }
+
+  function messageHost(): Window {
+    const host = shaderHost.value
+    return host && !host.closed ? host : window
+  }
+
+  async function beginShaderSession(iframe: HTMLIFrameElement, host: Window): Promise<void> {
+    const materialId = shaderMaterialId.value
+    if (!shaderOpen.value || !materialId) return
+    const mine = ++shaderToken
+    shaderAccepting = false
+    shaderStatus.value = 'Opening the shader editor.'
+    if (!shaderClient || shaderClientHost !== host || shaderClientFrame !== iframe) {
+      shaderClient?.destroy()
+      shaderClientHost = host
+      shaderClientFrame = iframe
+      shaderClient = new ShaderGraphClient(iframe, host)
+      shaderClient.onGraphChanged = () => {
+        if (shaderAccepting) void pullShader()
+      }
+      shaderClient.onUniformsChanged = (uniforms) => {
+        const current = shaderMaterialId.value
+        if (!shaderAccepting || !current) return
+        engine.patchShaderUniforms(current, uniforms)
+        shaderStatus.value = 'Live'
+      }
+    }
+    shaderClient.arm()
+    const editorUrl = new URL(shaderEditorUrl(shaderDocId(materialId)))
+    editorUrl.searchParams.set('hostReload', String(mine))
+    iframe.src = editorUrl.toString()
+    if (!host.closed) host.document.title = `Shader - ${shaderTitle(materialId)}`
+    try {
+      await shaderClient.waitReady()
+    } catch (error) {
+      if (mine !== shaderToken) return
+      const message = error instanceof Error ? error.message : String(error)
+      shaderStatus.value = message
+      engine.log(message, 'error')
+      return
+    }
+    if (mine !== shaderToken) return
+    try {
+      const graph = shaderGraph(materialId)
+      shaderLastGraph = JSON.stringify(graph ?? null)
+      if (graph) await shaderClient.load(graph)
+      else await shaderClient.setRootMaterial('material/standard')
+    } catch (error) {
+      if (mine !== shaderToken) return
+      const message = error instanceof Error ? error.message : String(error)
+      shaderStatus.value = message
+      engine.log(message, 'error')
+      return
+    }
+    if (mine !== shaderToken) return
+    shaderAccepting = true
+    shaderStatus.value = 'Live'
+  }
+
+  async function pullShader(): Promise<void> {
+    if (!shaderAccepting || !shaderClient) return
+    if (shaderPulling) {
+      shaderPullAgain = true
+      return
+    }
+    shaderPulling = true
+    try {
+      do {
+        shaderPullAgain = false
+        const materialId = shaderMaterialId.value
+        const client = shaderClient
+        if (!client || !materialId) return
+        const [graph, code] = await Promise.all([client.getGraph(), client.getCode()])
+        if (!shaderAccepting || shaderMaterialId.value !== materialId) return
+        const stored = graphHasNodes(graph.graphData) ? graph.graphData : null
+        shaderLastGraph = JSON.stringify(stored ?? null)
+        applyShaderGraph(materialId, graph.graphData, code.material)
+      } while (shaderPullAgain && shaderAccepting)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      shaderStatus.value = message
+      engine.log(message, 'error')
+    } finally {
+      shaderPulling = false
+    }
+  }
+
+  function closeShaderEditor(): void {
+    window.clearInterval(shaderPopupWatch)
+    shaderAccepting = false
+    shaderToken += 1
+    shaderClient?.destroy()
+    shaderClient = null
+    shaderClientHost = null
+    shaderClientFrame = null
+    shaderFallbackFrame = null
+    shaderOpen.value = false
+    shaderMaterialId.value = null
+    shaderStatus.value = ''
+    shaderFollowId = null
+    const popup = shaderHost.value
+    shaderHost.value = null
+    if (popup && !popup.closed) popup.close()
+  }
+
+  function attachShaderFrame(iframe: HTMLIFrameElement): void {
+    shaderFallbackFrame = iframe
+    if (shaderHost.value && !shaderHost.value.closed) return
+    void beginShaderSession(iframe, window)
+  }
+
+  function openShaderEditor(materialId: string): void {
+    if (!engine.materials.has(materialId)) return
+    shaderFollowId = engine.selectedId
+    shaderMaterialId.value = materialId
+    shaderStatus.value = 'Opening the shader editor.'
+    shaderOpen.value = true
+    openShaderPopup()
+    const host = shaderHost.value
+    const resource = engine.materials.get(materialId)
+    if (host && !host.closed && resource) host.document.title = `Shader - ${resource.name}`
+    const frameNode = shaderFrameElement()
+    if (frameNode) void beginShaderSession(frameNode, messageHost())
+  }
+
+  function openShaderForNode(nodeId: string): void {
+    const material = engine.materialOf(nodeId)
+    if (!material) return
+    openShaderEditor(material.id)
+  }
+
+  function openShaderForPath(path: string): void {
+    const id = engine.ensureMaterial(path)
+    if (!id) return
+    openShaderEditor(id)
+  }
+
+  function followShaderSelection(): void {
+    if (!shaderOpen.value) return
+    const selected = engine.selectedId
+    if (selected === shaderFollowId) return
+    shaderFollowId = selected
+    const next = engine.selected()?.materialId
+    if (!next || next === shaderMaterialId.value) return
+    shaderMaterialId.value = next
+    const frameNode = shaderFrameElement()
+    if (frameNode) void beginShaderSession(frameNode, messageHost())
+  }
+
+  function applyShaderGraph(materialId: string, graph: unknown, payload: ShaderCodePayload): void {
+    const resource = engine.materials.get(materialId)
+    if (!resource) return
+    const has = graphHasNodes(graph)
+    const nextGraph = has ? graph : null
+    const nextCode = has && payload.code && !payload.error ? payload.code : ''
+    const failed = has && !nextCode
+    const same = JSON.stringify(resource.graph ?? null) === JSON.stringify(nextGraph ?? null)
+      && (resource.code?.code ?? '') === nextCode
+      && !failed
+    if (same) {
+      shaderStatus.value = 'Live'
+      return
+    }
+    record(`Edit ${resource.name}`, () => {
+      const result = engine.applyShaderDocument(materialId, graph, payload)
+      if (!result.ok) {
+        shaderStatus.value = result.error
+        engine.log(`${resource.name}: ${result.error}`, 'error')
+        return
+      }
+      shaderStatus.value = 'Live'
+    }, { material: true })
+  }
+
+  function patchShaderUniforms(materialId: string, uniforms: readonly ShaderUniformEntry[]): void {
+    engine.patchShaderUniforms(materialId, uniforms)
+  }
+
+  watch(shaderStatus, (text) => {
+    const host = shaderHost.value
+    if (!host || host.closed) return
+    const node = host.document.getElementById('shader-status')
+    if (node) node.textContent = text
+  })
+
+  watch(revision, () => {
+    if (!shaderAccepting || !shaderMaterialId.value) return
+    const graph = shaderGraph(shaderMaterialId.value)
+    if (JSON.stringify(graph ?? null) === shaderLastGraph) return
+    const frameNode = shaderFrameElement()
+    if (!frameNode) return
+    void beginShaderSession(frameNode, messageHost())
+  })
 
   function compileBound(log: boolean): void {
     const id = boundMaterialId.value
@@ -2747,6 +3022,10 @@ export const useEditorStore = defineStore('editor', () => {
     if (current) {
       items.push({ separator: true, label: '', action: () => {} })
       items.push({
+        label: 'Edit Shader',
+        action: () => openShaderForNode(nodeId),
+      })
+      items.push({
         label: 'Make Unique',
         action: () => {
           record(`Unique Material ${nodeLabel(nodeId)}`, () => {
@@ -3209,6 +3488,10 @@ export const useEditorStore = defineStore('editor', () => {
       if (component) showScript(component.id)
       return
     }
+    if (isMaterialFile(path)) {
+      openShaderForPath(path)
+      return
+    }
     if (path.endsWith('.json')) openJsonDoc(path)
   }
 
@@ -3418,6 +3701,10 @@ export const useEditorStore = defineStore('editor', () => {
     tslStatus,
     tslError,
     tslName,
+    shaderOpen,
+    shaderMaterialId,
+    shaderStatus,
+    shaderHost,
     logs,
     sceneFilter,
     fileFilter,
@@ -3607,6 +3894,16 @@ export const useEditorStore = defineStore('editor', () => {
     applyNodePreset,
     onTslChange,
     compileBound,
+    shaderTitle,
+    shaderDocId,
+    shaderGraph,
+    openShaderEditor,
+    openShaderForNode,
+    openShaderForPath,
+    closeShaderEditor,
+    attachShaderFrame,
+    applyShaderGraph,
+    patchShaderUniforms,
     saveOpenScene,
     loadOpenScene,
     openSceneFile,

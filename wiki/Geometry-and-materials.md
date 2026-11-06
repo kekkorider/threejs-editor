@@ -55,9 +55,12 @@ The Material section edits the name, the preset, the side, transparency, and wir
 | Transparent | `true` | Transparent, and depth write turns off. |
 | Wireframe | `true` | Wireframe draw. |
 
-The material name is the File system path `res://materials/Name.tsl`.
+The material file is `res://materials/Name.json`.
+The File system lists `Name`.
 The source is the TSL text.
 The bottom panel edits that text for the bound material.
+Edit Shader opens the node editor in its own window.
+The node graph is stored in the same JSON file.
 
 ## Shared materials
 
