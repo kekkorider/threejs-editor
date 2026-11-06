@@ -77,6 +77,35 @@ async function handle(
     sendJson(res, 200, { entries: readTree(root, '') })
     return
   }
+  if (route.startsWith(`${PREFIX}/raw/`) && req.method === 'GET') {
+    const rel = route.slice(`${PREFIX}/raw/`.length).split('/').map((part) => decodeURIComponent(part)).join('/')
+    const full = resolveRes(root, `res://${rel}`)
+    if (!full) {
+      sendJson(res, 400, { error: 'Path is outside the project folder.' })
+      return
+    }
+    if (!fs.existsSync(full) || !fs.statSync(full).isFile()) {
+      sendJson(res, 404, { error: 'File not found.' })
+      return
+    }
+    res.statusCode = 200
+    res.setHeader('Content-Type', mimeOf(full))
+    res.setHeader('Cache-Control', 'no-store')
+    res.end(fs.readFileSync(full))
+    return
+  }
+  if (route === `${PREFIX}/bytes` && req.method === 'PUT') {
+    const full = resolveRes(root, url.searchParams.get('path') ?? '')
+    if (!full) {
+      sendJson(res, 400, { error: 'Path is outside the project folder.' })
+      return
+    }
+    const data = await readBuffer(req)
+    fs.mkdirSync(path.dirname(full), { recursive: true })
+    fs.writeFileSync(full, data)
+    sendJson(res, 200, { ok: true })
+    return
+  }
   if (route === `${PREFIX}/file` && req.method === 'GET') {
     const full = resolveRes(root, url.searchParams.get('path') ?? '')
     if (!full) {
@@ -177,13 +206,37 @@ function resolveRes(root: string, resPath: string): string | null {
   return full
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
+function readBuffer(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
     req.on('data', (chunk: Buffer | string) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+    req.on('end', () => resolve(Buffer.concat(chunks)))
     req.on('error', reject)
   })
+}
+
+function readBody(req: IncomingMessage): Promise<string> {
+  return readBuffer(req).then((buffer) => buffer.toString('utf8'))
+}
+
+function mimeOf(file: string): string {
+  switch (path.extname(file).toLowerCase()) {
+    case '.png': return 'image/png'
+    case '.jpg':
+    case '.jpeg': return 'image/jpeg'
+    case '.webp': return 'image/webp'
+    case '.gif': return 'image/gif'
+    case '.hdr': return 'image/vnd.radiance'
+    case '.exr': return 'image/x-exr'
+    case '.glb': return 'model/gltf-binary'
+    case '.gltf': return 'model/gltf+json'
+    case '.obj': return 'text/plain'
+    case '.wav': return 'audio/wav'
+    case '.mp3': return 'audio/mpeg'
+    case '.ogg':
+    case '.oga': return 'audio/ogg'
+    default: return 'application/octet-stream'
+  }
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {

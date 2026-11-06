@@ -5,6 +5,7 @@ export default { name: 'FileTreeNode' }
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { COMPONENT_DRAG_PREFIX, markScriptDrag } from '../behaviors'
+import { importerForPath, isModelFile, writeModelDrag } from '../importSettings'
 import { writeSceneDrag } from '../sceneFile'
 import { isMaterialFile, isMeshFile, isScenePath, PROJECT_DRAG_TYPE, RESOURCE_DRAG_TYPE, type FsEntry } from '../projectFs'
 import Icon from './Icon.vue'
@@ -27,8 +28,10 @@ function matches(entry: FsEntry, query: string): boolean {
 function iconName(entry: FsEntry): string {
   if (entry.kind === 'dir') return 'folder'
   if (isScenePath(entry.path)) return 'scene'
-  if (isMeshFile(entry.path)) return 'meshfile'
+  if (isModelFile(entry.path) || isMeshFile(entry.path)) return 'meshfile'
+  if (importerForPath(entry.path) === 'texture') return 'texture'
   if (isMaterialFile(entry.path)) return 'material'
+  if (importerForPath(entry.path) === 'wav' || importerForPath(entry.path) === 'mp3' || importerForPath(entry.path) === 'oggvorbis') return 'audio'
   if (entry.path.endsWith('.ts')) return 'component'
   return 'script'
 }
@@ -36,8 +39,10 @@ function iconName(entry: FsEntry): string {
 function iconClass(entry: FsEntry): string {
   if (entry.kind === 'dir') return 'folder'
   if (isScenePath(entry.path)) return 'scene'
-  if (isMeshFile(entry.path)) return 'mesh'
+  if (isModelFile(entry.path) || isMeshFile(entry.path)) return 'mesh'
+  if (importerForPath(entry.path) === 'texture') return 'texture'
   if (isMaterialFile(entry.path)) return 'mat'
+  if (importerForPath(entry.path) === 'wav' || importerForPath(entry.path) === 'mp3' || importerForPath(entry.path) === 'oggvorbis') return 'audio'
   if (entry.path.endsWith('.ts')) return 'component'
   return 'script'
 }
@@ -62,6 +67,7 @@ function onDrag(event: DragEvent): void {
   }
   const component = store.componentFiles.find((file) => file.path === props.entry.path)
   if (component) markScriptDrag(event.dataTransfer, `${COMPONENT_DRAG_PREFIX}${component.id}`)
+  if (isModelFile(props.entry.path)) writeModelDrag(event.dataTransfer, props.entry.path)
   event.dataTransfer.setData(PROJECT_DRAG_TYPE, props.entry.path)
 }
 
@@ -77,17 +83,32 @@ function onClick(event: MouseEvent): void {
   store.selectProjectPath(props.entry.path, event.shiftKey, event.ctrlKey || event.metaKey)
 }
 
+function osFiles(transfer: DataTransfer | null): boolean {
+  if (!transfer) return false
+  const types = [...transfer.types]
+  return types.includes('Files') && !types.includes(PROJECT_DRAG_TYPE)
+}
+
 function onFolderOver(event: DragEvent): void {
-  if (props.entry.kind !== 'dir') return
-  if (!event.dataTransfer || ![...event.dataTransfer.types].includes(PROJECT_DRAG_TYPE)) return
+  if (props.entry.kind !== 'dir' || !event.dataTransfer) return
+  const types = [...event.dataTransfer.types]
+  if (!types.includes(PROJECT_DRAG_TYPE) && !osFiles(event.dataTransfer)) return
   event.preventDefault()
-  event.dataTransfer.dropEffect = 'move'
+  event.dataTransfer.dropEffect = osFiles(event.dataTransfer) ? 'copy' : 'move'
   over.value = true
 }
 
 function onFolderDrop(event: DragEvent): void {
   over.value = false
   if (props.entry.kind !== 'dir') return
+  if (osFiles(event.dataTransfer)) {
+    const files = event.dataTransfer?.files
+    if (!files || files.length === 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    void store.importExternalFiles(files, props.entry.path)
+    return
+  }
   const from = event.dataTransfer?.getData(PROJECT_DRAG_TYPE) ?? ''
   if (!from) return
   event.preventDefault()

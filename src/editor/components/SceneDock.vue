@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { isModelDrag, modelDragPath } from '../importSettings'
 import { isSceneDrag, sceneDragPath } from '../sceneFile'
+import ImportDock from './ImportDock.vue'
 import Icon from './Icon.vue'
 import SceneTreeNode from './SceneTreeNode.vue'
 import { useEditorStore } from '../stores/editor'
@@ -10,7 +12,7 @@ const query = computed(() => store.sceneFilter.trim().toLowerCase())
 const treeDrop = ref(false)
 
 function onTreeOver(event: DragEvent): void {
-  if (!isSceneDrag(event.dataTransfer)) return
+  if (!isSceneDrag(event.dataTransfer) && !isModelDrag(event.dataTransfer)) return
   event.preventDefault()
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
   treeDrop.value = true
@@ -25,6 +27,11 @@ function onTreeLeave(event: DragEvent): void {
 
 function onTreeDrop(event: DragEvent): void {
   treeDrop.value = false
+  const model = modelDragPath(event.dataTransfer)
+  if (model && store.rootId) {
+    void store.instanceImportedModel(model, store.rootId)
+    return
+  }
   const path = sceneDragPath(event.dataTransfer)
   if (!path || !store.rootId) return
   store.instanceScene(path, store.rootId)
@@ -47,8 +54,12 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="dock scene-dock">
-    <div class="dock-title">Scene</div>
-    <div class="dock-tools">
+    <div class="dock-tabs">
+      <button type="button" class="dock-tab" :class="{ active: store.leftDock === 'scene' }" @click="store.leftDock = 'scene'">Scene</button>
+      <button type="button" class="dock-tab" :class="{ active: store.leftDock === 'import' }" @click="store.leftDock = 'import'">Import</button>
+    </div>
+    <ImportDock v-if="store.leftDock === 'import'" />
+    <div v-if="store.leftDock === 'scene'" class="dock-tools">
       <button type="button" class="icon-btn" :title="store.undoTitle" :disabled="!store.canUndo" @click="store.undo()">
         <Icon name="back" />
       </button>
@@ -68,8 +79,9 @@ onBeforeUnmount(() => {
         <Icon name="delete" />
       </button>
     </div>
-    <input v-model="store.sceneFilter" class="filter scene-filter" placeholder="Filter nodes" />
+    <input v-if="store.leftDock === 'scene'" v-model="store.sceneFilter" class="filter scene-filter" placeholder="Filter nodes" />
     <div
+      v-if="store.leftDock === 'scene'"
       class="tree scene-tree"
       :class="{ 'drop-target': treeDrop }"
       @dragenter="onTreeOver"

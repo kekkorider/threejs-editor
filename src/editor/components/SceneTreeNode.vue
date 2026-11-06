@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import { COMPONENT_DRAG_PREFIX, INSTANCE_DRAG_PREFIX, markScriptDrag } from '../behaviors'
+import { modelDragPath } from '../importSettings'
 import { isSceneDrag, sceneDragPath } from '../sceneFile'
 import { kindClass, kindIcon } from '../lib/format'
 import { useEditorStore } from '../stores/editor'
@@ -83,6 +84,11 @@ function clearDrop(event: DragEvent): void {
 
 function acceptDrop(event: DragEvent): void {
   drop.value = false
+  const model = modelDragPath(event.dataTransfer)
+  if (model) {
+    void store.instanceImportedModel(model, props.id)
+    return
+  }
   const scenePath = sceneDragPath(event.dataTransfer)
   if (scenePath) {
     store.instanceScene(scenePath, props.id)

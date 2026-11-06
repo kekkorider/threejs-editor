@@ -38,6 +38,8 @@ import {
   type GeometryType,
 } from './geometry'
 import { fingerprint } from './history'
+import { isModelFile, readImportFile } from './importSettings'
+import { loadImportedModel } from './importModel'
 import {
   fileStem,
   hasFile,
@@ -47,6 +49,7 @@ import {
   parentPath,
   projectPaths,
   projectReady,
+  rawUrl,
   readCached,
   readMaterialFile,
   readMeshFile,
@@ -340,7 +343,19 @@ const GRID_DEFAULTS = {
   position: { x: 0, y: 0, z: 0 },
 }
 
+function disposeImported(object: THREE.Object3D): void {
+  object.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) return
+    child.geometry?.dispose()
+    const materials = Array.isArray(child.material) ? child.material : [child.material]
+    for (const material of materials) material?.dispose()
+  })
+}
+
 export class EditorState {
+  /** Called after an imported model finishes loading. */
+  notify: (() => void) | null = null
+  private importToken = new Map<string, number>()
   starter: ThreeStart | null = null
   nodes = new Map<string, EditorNode>()
   geometries = new Map<string, GeometryResource>()
@@ -660,6 +675,44 @@ export class EditorState {
     this.log(`Instanced ${path}`)
     this.select(node.id)
     return node
+  }
+
+  /** Place an imported model under `parentId`. Reimport rebuilds the children. */
+  async instanceImportedModel(path: string, parentId?: string | null): Promise<EditorNode | null> {
+    if (this.playing) {
+      this.log('Stop the scene before instancing.', 'warn')
+      return null
+    }
+    if (!isModelFile(path)) return null
+    const parent = this.parentOrSelected(parentId)
+    const object = new THREE.Group()
+    const stem = path.slice(path.lastIndexOf('/') + 1).replace(/\.[^.]+$/, '') || 'Model'
+    object.name = this.uniqueName(stem)
+    parent.object.add(object)
+    const node = this.addNode(object, parent.id, 'Node3D', false, { silent: true })
+    node.instancePath = path
+    await this.expandImportedModel(path, node.id)
+    this.enterTree(node)
+    this.log(`Instanced ${path}`)
+    this.select(node.id)
+    return node
+  }
+
+  /** Rebuild every instance of an imported model from its current import settings. */
+  async reloadImported(path: string): Promise<void> {
+    const holders = [...this.nodes.values()].filter((node) => node.instancePath === path)
+    for (const holder of holders) await this.expandImportedModel(path, holder.id)
+    if (holders.length > 0) this.notify?.()
+  }
+
+  importUsers(path: string): string[] {
+    const prefix = path
+    const users: string[] = []
+    for (const node of this.nodes.values()) {
+      if (!node.instancePath || !isModelFile(node.instancePath)) continue
+      if (node.instancePath === prefix || node.instancePath.startsWith(`${prefix}/`)) users.push(node.name)
+    }
+    return users
   }
 
   makeLocal(id: string): void {
@@ -2851,11 +2904,67 @@ export class EditorState {
     this.applyComponents(node, record.components)
     if (record.instance) {
       node.instancePath = record.instance
-      this.expandInstance(record.instance, node.id, stack)
+      if (isModelFile(record.instance)) void this.expandImportedModel(record.instance, node.id)
+      else this.expandInstance(record.instance, node.id, stack)
     }
     this.captureDefaults(node)
     this.enterTree(node)
     return node
+  }
+
+  private async expandImportedModel(path: string, holderId: string): Promise<void> {
+    const holder = this.nodes.get(holderId)
+    if (!holder) return
+    const token = (this.importToken.get(holderId) ?? 0) + 1
+    this.importToken.set(holderId, token)
+    const file = readImportFile(path)
+    const params = file?.params ?? {}
+    let loaded: THREE.Group
+    try {
+      loaded = await loadImportedModel(rawUrl(path), path, params)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.log(`Could not import ${path}: ${message}`, 'error')
+      this.notify?.()
+      return
+    }
+    if (this.importToken.get(holderId) !== token || !this.nodes.has(holderId)) {
+      disposeImported(loaded)
+      return
+    }
+    this.clearOwned(holderId)
+    const scale = typeof params['nodes/root_scale'] === 'number' ? params['nodes/root_scale'] : 1
+    const apply = params['nodes/apply_root_scale'] !== false
+    if (apply && scale !== 1) loaded.scale.multiplyScalar(scale)
+    loaded.updateMatrix()
+    for (const child of [...loaded.children]) {
+      child.applyMatrix4(loaded.matrix)
+      holder.object.add(child)
+      this.adoptImported(child, holderId, holderId)
+    }
+    if (!apply) holder.object.scale.set(scale, scale, scale)
+    disposeImported(loaded)
+    this.notify?.()
+  }
+
+  private clearOwned(holderId: string): void {
+    const holder = this.nodes.get(holderId)
+    if (!holder) return
+    for (const childId of [...holder.childIds]) {
+      const child = this.nodes.get(childId)
+      if (child?.instanceOwnerId !== holderId) continue
+      disposeImported(child.object)
+      this.deleteNode(childId, true)
+    }
+  }
+
+  private adoptImported(object: THREE.Object3D, parentId: string, rootId: string): void {
+    const kind = object instanceof THREE.Mesh ? 'MeshInstance3D' : 'Node3D'
+    if (!object.name) object.name = kind === 'MeshInstance3D' ? 'Mesh' : 'Node'
+    object.name = this.uniqueName(object.name)
+    const node = this.addNode(object, parentId, kind, false, { silent: true })
+    node.instanceOwnerId = rootId
+    for (const child of [...object.children]) this.adoptImported(child, node.id, rootId)
   }
 
   /** Build a packed scene's nodes under `holderId` and mark them as owned by that instance. */
