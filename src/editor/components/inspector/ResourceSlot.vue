@@ -2,7 +2,7 @@
 import { ref } from 'vue'
 import { RESOURCE_DRAG_TYPE, fileNameOf } from '../../projectFs'
 
-const props = defineProps<{ path: string | null, accept: string }>()
+const props = defineProps<{ path: string | null, accept: string, root?: string }>()
 const emit = defineEmits<{ click: [event: MouseEvent], dropPath: [path: string] }>()
 const over = ref(false)
 
@@ -21,6 +21,7 @@ function onDrop(event: DragEvent): void {
   over.value = false
   const path = event.dataTransfer?.getData(RESOURCE_DRAG_TYPE) ?? ''
   if (!path.endsWith(props.accept)) return
+  if (props.root && !path.startsWith(props.root)) return
   event.preventDefault()
   emit('dropPath', path)
 }

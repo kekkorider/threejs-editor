@@ -27,6 +27,7 @@ import {
   fileNameOf,
   hasEntry,
   isMeshFile,
+  isMaterialFile,
   joinRes,
   mkdirPath,
   movePath,
@@ -244,6 +245,8 @@ export const useEditorStore = defineStore('editor', () => {
   const expandedFiles = ref(directoryPaths(snapshotTree()))
   const fileSelection = ref<string[]>([])
   const focusDock = ref<'scene' | 'files'>('scene')
+  const openJsonPaths = ref<string[]>([])
+  const editorKind = ref<'script' | 'json'>('script')
   const jsonPath = ref<string | null>(null)
   const jsonSource = ref('')
   const jsonStatus = ref('')
@@ -888,15 +891,9 @@ export const useEditorStore = defineStore('editor', () => {
     return node.childIds.some((childId) => nodeMatches(childId, query))
   }
 
-  function closeJsonEditor(): void {
-    jsonPath.value = null
-    jsonStatus.value = ''
-  }
-
   function select(id: string | null): void {
     selectedComponentId.value = null
     focusDock.value = 'scene'
-    closeJsonEditor()
     engine.select(id)
     touch()
   }
@@ -905,7 +902,6 @@ export const useEditorStore = defineStore('editor', () => {
     if ((shift || ctrl) && !id) return
     selectedComponentId.value = null
     focusDock.value = 'scene'
-    closeJsonEditor()
     keepAnchor = Boolean(shift && id)
     try {
       if (ctrl && id) engine.toggleSelected(id)
@@ -920,7 +916,6 @@ export const useEditorStore = defineStore('editor', () => {
   function selectBoxed(ids: string[], shift: boolean, ctrl: boolean): void {
     selectedComponentId.value = null
     focusDock.value = 'scene'
-    closeJsonEditor()
     keepAnchor = shift
     try {
       if (ctrl && shift) engine.toggleEach(ids)
@@ -962,7 +957,6 @@ export const useEditorStore = defineStore('editor', () => {
   function selectFromTree(id: string, shift: boolean, ctrl: boolean): void {
     selectedComponentId.value = null
     focusDock.value = 'scene'
-    closeJsonEditor()
     const order = visibleNodeIds()
     const from = anchorId ? order.indexOf(anchorId) : -1
     const to = order.indexOf(id)
@@ -2083,6 +2077,7 @@ export const useEditorStore = defineStore('editor', () => {
   })
 
   function showScript(resourceId: string): void {
+    editorKind.value = 'script'
     if (dockResourceId.value === resourceId) rememberDockBuffer()
     if (!openScriptIds.value.includes(resourceId)) {
       openScriptIds.value = [...openScriptIds.value, resourceId]
@@ -2268,7 +2263,7 @@ export const useEditorStore = defineStore('editor', () => {
     if (!node || node.componentIds.length === 0) return
     const first = node.componentIds[0]
     if (node.componentIds.length === 1 && first) {
-      focusNodeScript(nodeId, first)
+      editComponent(first)
       return
     }
     if (engine.selectedId !== nodeId || engine.selectedIds.length !== 1) {
@@ -2282,7 +2277,7 @@ export const useEditorStore = defineStore('editor', () => {
       icon: 'script',
       iconClass: 'component',
       title: row.path,
-      action: () => focusNodeScript(nodeId, row.id),
+      action: () => editComponent(row.id),
     }))
     showPopup(new DOMRect(x, y, 0, 0), items, false)
   }
@@ -3127,6 +3122,7 @@ export const useEditorStore = defineStore('editor', () => {
     recordFiles(`Rename ${fileNameOf(from)}`, () => {
       movePath(from, next)
       engine.retargetProjectPath(from, next)
+      if (next.endsWith('.ts')) engine.renameComponentFile(next)
     })
   }
 
@@ -3204,12 +3200,15 @@ export const useEditorStore = defineStore('editor', () => {
 
   function activateProjectPath(path: string): void {
     if (path.endsWith('.tscn')) openSceneFile(path)
-    else if (path.endsWith('.json')) openJsonFile(path)
-    else if (path.endsWith('.tsl')) selectMaterialPath(path)
-    else     if (path.endsWith('.ts')) {
+  }
+
+  function editProjectPath(path: string): void {
+    if (path.endsWith('.ts')) {
       const component = componentFiles.value.find((file) => file.path === path)
-      if (component) openComponentDialog(component.id)
+      if (component) showScript(component.id)
+      return
     }
+    if (path.endsWith('.json')) openJsonDoc(path)
   }
 
   function selectProjectPath(path: string, shift: boolean, ctrl: boolean): void {
@@ -3304,6 +3303,32 @@ export const useEditorStore = defineStore('editor', () => {
     focusDock.value = 'files'
   }
 
+  function openJsonDoc(path: string): void {
+    if (!openJsonPaths.value.includes(path)) openJsonPaths.value = [...openJsonPaths.value, path]
+    editorKind.value = 'json'
+    openJsonFile(path)
+    setScreen('script')
+  }
+
+  function showJsonDoc(path: string): void {
+    if (!openJsonPaths.value.includes(path)) return
+    editorKind.value = 'json'
+    openJsonFile(path)
+    setScreen('script')
+  }
+
+  function closeJsonDoc(path: string): void {
+    openJsonPaths.value = openJsonPaths.value.filter((item) => item !== path)
+    if (jsonPath.value !== path) return
+    const next = openJsonPaths.value.at(-1) ?? null
+    if (next) {
+      openJsonFile(next)
+      return
+    }
+    jsonPath.value = null
+    editorKind.value = 'script'
+  }
+
   function onJsonChange(value: string): void {
     jsonSource.value = value
     if (jsonStatus.value) jsonStatus.value = ''
@@ -3322,7 +3347,7 @@ export const useEditorStore = defineStore('editor', () => {
     const text = jsonSource.value.endsWith('\n') ? jsonSource.value : `${jsonSource.value}\n`
     writeText(path, text)
     if (path === SETTINGS_PATH) adoptSettingsFromCache()
-    if (isMeshFile(path)) engine.reloadResourceFile(path)
+    if (isMeshFile(path) || isMaterialFile(path)) engine.reloadResourceFile(path)
     jsonSavedText.value = readCached(path) ?? text
     jsonSource.value = jsonSavedText.value
     jsonStatus.value = 'Applied'
@@ -3354,7 +3379,7 @@ export const useEditorStore = defineStore('editor', () => {
     projectTree.value = snapshotTree()
     for (const path of changed) {
       if (path.endsWith('.ts')) engine.syncComponentFile(path)
-      else if (isMeshFile(path) || path.endsWith('.tres') || path.endsWith('.tsl')) {
+      else if (isMeshFile(path) || isMaterialFile(path) || path.endsWith('.tres') || path.endsWith('.tsl')) {
         if (!engine.sceneDirty) engine.reloadResourceFile(path)
       } else if (path === engine.scenePath && !engine.sceneDirty) engine.loadOpenScene()
     }
@@ -3400,6 +3425,8 @@ export const useEditorStore = defineStore('editor', () => {
     expandedFiles,
     fileSelection,
     jsonPath,
+    openJsonPaths,
+    editorKind,
     jsonSource,
     jsonStatus,
     jsonStatusKey,
@@ -3601,7 +3628,11 @@ export const useEditorStore = defineStore('editor', () => {
     assignMeshFile,
     assignMaterialFile,
     selectProjectPath,
+    editProjectPath,
     openJsonFile,
+    openJsonDoc,
+    showJsonDoc,
+    closeJsonDoc,
     onJsonChange,
     saveJsonFile,
     openInstanceDialog,

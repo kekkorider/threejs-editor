@@ -44,6 +44,7 @@ export function editorProjectPlugin(): Plugin {
           next()
           return
         }
+        fs.mkdirSync(root, { recursive: true })
         void handle(root, clients, req, res).catch((error: unknown) => {
           const message = error instanceof Error ? error.message : String(error)
           sendJson(res, 500, { error: message })

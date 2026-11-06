@@ -41,6 +41,7 @@ import { fingerprint } from './history'
 import {
   fileStem,
   hasFile,
+  isMaterialFile,
   isMeshFile,
   movePath,
   parentPath,
@@ -1842,7 +1843,7 @@ export class EditorState {
   }
 
   reloadResourceFile(path: string): void {
-    if ((isMeshFile(path) || path.endsWith('.tres') || path.endsWith('.tsl')) && !readCached(path)) {
+    if ((isMeshFile(path) || isMaterialFile(path) || path.endsWith('.tres') || path.endsWith('.tsl')) && !readCached(path)) {
       this.releaseResourcePath(path)
       return
     }
@@ -1856,7 +1857,7 @@ export class EditorState {
       this.rebuildGeometry(resource.id)
       return
     }
-    if (!path.endsWith('.tsl')) return
+    if (!isMaterialFile(path) && !path.endsWith('.tsl')) return
     const file = readMaterialFile(path)
     const resource = [...this.materials.values()].find((item) => item.path === path)
     if (!file || !resource) return
@@ -1975,7 +1976,7 @@ export class EditorState {
     const next = name.trim().replace(/[\\/]/g, '')
     if (!resource || !next) return
     resource.name = this.uniqueResourceName(next, this.materials, resource.id)
-    resource.path = this.retitleFile(resource.path, 'res://materials', resource.name, '.tsl')
+    resource.path = this.retitleFile(resource.path, 'res://materials', resource.name, '.json')
     this.persistMaterialFile(resource)
     if (resource.material) resource.material.name = resource.name
     this.touchScene()
@@ -2582,7 +2583,7 @@ export class EditorState {
         side: snapshot.side,
         transparent: snapshot.transparent,
         wireframe: snapshot.wireframe,
-        path: uniqueFilePath('res://materials', fileStem(looseName), '.tsl'),
+        path: uniqueFilePath('res://materials', fileStem(looseName), '.json'),
       })
       return id
     }
@@ -3633,7 +3634,7 @@ export class EditorState {
       side: flags.side,
       transparent: flags.transparent,
       wireframe: flags.wireframe,
-      path: options?.path ?? uniqueFilePath('res://materials', fileStem(unique), '.tsl'),
+      path: options?.path ?? uniqueFilePath('res://materials', fileStem(unique), '.json'),
       material: null,
       error: null,
       defaults: {
@@ -3704,6 +3705,12 @@ export class EditorState {
       const ctor = behaviour.constructor as Object3DBehaviourConstructor
       let resource = this.resourceByConstructor(ctor)
       if (!resource) {
+        const className = ctor.name
+        resource = className
+          ? [...this.components.values()].find((item) => item.name === className)
+          : undefined
+      }
+      if (!resource) {
         const name = this.uniqueComponentName(ctor.name || 'Component')
         const source = `// ${name} was already attached to an object.\n`
         resource = {
@@ -3724,6 +3731,34 @@ export class EditorState {
 
   private uniqueComponentName(raw: string): string {
     return uniqueIdentifier(raw, this.componentNames())
+  }
+
+  /** File-system rename. The scene tree uses the new file name. */
+  renameComponentFile(path: string): void {
+    const resource = [...this.components.values()].find((item) => item.path === path)
+    if (!resource || !path.endsWith('.ts')) return
+    const stem = path.slice(path.lastIndexOf('/') + 1, -3)
+    const taken = new Set(this.componentNames())
+    taken.delete(resource.name)
+    const className = uniqueIdentifier(stem, taken)
+    if (!className || resource.name === className) return
+    const source = withClassName(resource.source, className)
+    try {
+      const compiled = compileComponent(source)
+      const previous = resource.name
+      resource.builtin = false
+      resource.name = compiled.name
+      resource.source = source
+      resource.ctor = compiled.ctor
+      resource.error = null
+      writeText(path, source)
+      if (previous !== resource.name) this.signalBus.renameComponent(previous, resource.name)
+      this.retargetInstances(resource)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      resource.error = message
+      this.log(`${path}: ${message}`, 'error')
+    }
   }
 
   private retargetInstances(resource: ComponentResource): void {

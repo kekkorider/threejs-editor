@@ -36,7 +36,8 @@ function onName(event: Event): void {
     <PropRow label="Material Override">
       <ResourceSlot
         :path="material?.path ?? null"
-        accept=".tsl"
+        accept=".json"
+        root="res://materials/"
         @click="openMenu"
         @drop-path="store.assignMaterialFile(node.id, $event)"
       />

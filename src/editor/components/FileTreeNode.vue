@@ -6,7 +6,7 @@ export default { name: 'FileTreeNode' }
 import { computed, ref } from 'vue'
 import { COMPONENT_DRAG_PREFIX, markScriptDrag } from '../behaviors'
 import { writeSceneDrag } from '../sceneFile'
-import { isMeshFile, PROJECT_DRAG_TYPE, RESOURCE_DRAG_TYPE, type FsEntry } from '../projectFs'
+import { isMaterialFile, isMeshFile, PROJECT_DRAG_TYPE, RESOURCE_DRAG_TYPE, type FsEntry } from '../projectFs'
 import Icon from './Icon.vue'
 import { useEditorStore } from '../stores/editor'
 
@@ -28,7 +28,7 @@ function iconName(entry: FsEntry): string {
   if (entry.kind === 'dir') return 'folder'
   if (entry.path.endsWith('.tscn')) return 'scene'
   if (isMeshFile(entry.path)) return 'meshfile'
-  if (entry.path.endsWith('.tsl')) return 'material'
+  if (isMaterialFile(entry.path)) return 'material'
   if (entry.path.endsWith('.ts')) return 'component'
   return 'script'
 }
@@ -37,13 +37,15 @@ function iconClass(entry: FsEntry): string {
   if (entry.kind === 'dir') return 'folder'
   if (entry.path.endsWith('.tscn')) return 'scene'
   if (isMeshFile(entry.path)) return 'mesh'
-  if (entry.path.endsWith('.tsl')) return 'mat'
+  if (isMaterialFile(entry.path)) return 'mat'
   if (entry.path.endsWith('.ts')) return 'component'
   return 'script'
 }
 
 function displayName(entry: FsEntry): string {
-  if (isMeshFile(entry.path) && entry.name.endsWith('.json')) return entry.name.slice(0, -'.json'.length)
+  if ((isMeshFile(entry.path) || isMaterialFile(entry.path)) && entry.name.endsWith('.json')) {
+    return entry.name.slice(0, -'.json'.length)
+  }
   return entry.name
 }
 
@@ -52,7 +54,7 @@ function onDrag(event: DragEvent): void {
   suppressClick = true
   event.dataTransfer.effectAllowed = 'copyMove'
   event.dataTransfer.setData(PROJECT_DRAG_TYPE, props.entry.path)
-  if (isMeshFile(props.entry.path) || props.entry.path.endsWith('.tsl')) {
+  if (isMeshFile(props.entry.path) || isMaterialFile(props.entry.path)) {
     event.dataTransfer.setData(RESOURCE_DRAG_TYPE, props.entry.path)
   }
   if (props.entry.path.endsWith('.tscn') && props.entry.path !== store.scenePath) {
@@ -61,6 +63,10 @@ function onDrag(event: DragEvent): void {
   const component = store.componentFiles.find((file) => file.path === props.entry.path)
   if (component) markScriptDrag(event.dataTransfer, `${COMPONENT_DRAG_PREFIX}${component.id}`)
   event.dataTransfer.setData(PROJECT_DRAG_TYPE, props.entry.path)
+}
+
+function onDoubleClick(): void {
+  store.editProjectPath(props.entry.path)
 }
 
 function onClick(event: MouseEvent): void {
@@ -103,6 +109,7 @@ function commitRename(event: Event): void {
       :title="entry.path"
       draggable="true"
       @click.stop="onClick($event)"
+      @dblclick.stop="onDoubleClick"
       @contextmenu.prevent.stop="store.openProjectMenu(entry.path, $event.clientX, $event.clientY)"
       @dragstart.stop="onDrag"
       @dragover="onFolderOver"

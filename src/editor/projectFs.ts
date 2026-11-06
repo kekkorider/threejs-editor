@@ -133,6 +133,11 @@ export function isMeshFile(path: string): boolean {
   return path.startsWith('res://meshes/') && path.endsWith('.json')
 }
 
+/** Material resource. The File system shows the name without `.json`. */
+export function isMaterialFile(path: string): boolean {
+  return path.startsWith('res://materials/') && path.endsWith('.json')
+}
+
 export function adoptSettingsFromCache(): void {
   const text = files.get(SETTINGS_PATH)
   if (!text) return
@@ -350,17 +355,23 @@ export function retarget(path: string, from: string, to: string): string {
   return path
 }
 
-function migrateTresMeshes(): void {
-  const legacy = [...files.keys()].filter((path) => path.startsWith('res://meshes/') && path.endsWith('.tres'))
-  for (const path of legacy) {
-    const next = `${path.slice(0, -'.tres'.length)}.json`
-    if (path !== next && !files.has(next) && !directories.has(next)) movePath(path, next)
+function migrateLegacyResources(): void {
+  const pairs: [string, string, string][] = [
+    ['res://meshes/', '.tres', '.json'],
+    ['res://materials/', '.tsl', '.json'],
+  ]
+  for (const [folder, fromExt, toExt] of pairs) {
+    const legacy = [...files.keys()].filter((path) => path.startsWith(folder) && path.endsWith(fromExt))
+    for (const path of legacy) {
+      const next = `${path.slice(0, -fromExt.length)}${toExt}`
+      if (path !== next && !files.has(next) && !directories.has(next)) movePath(path, next)
+    }
   }
 }
 
 async function boot(): Promise<void> {
   await pullAll()
-  migrateTresMeshes()
+  migrateLegacyResources()
   const hadSettings = files.has(SETTINGS_PATH)
   const seed = await import('./projectSeed')
   const legacy = seed.takeLegacy()

@@ -45,6 +45,7 @@ function openMenu(event: MouseEvent): void {
       <ResourceSlot
         :path="geometry?.path ?? null"
         accept=".json"
+        root="res://meshes/"
         @click="openMenu"
         @drop-path="store.assignMeshFile(node.id, $event)"
       />

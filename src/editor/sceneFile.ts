@@ -230,7 +230,7 @@ export function externalizeScene(file: SceneFile): SceneFile {
   for (const record of file.materials) {
     const path = record.path?.startsWith('res://')
       ? record.path
-      : uniqueFilePath('res://materials', fileStem(record.name), '.tsl')
+      : uniqueFilePath('res://materials', fileStem(record.name), '.json')
     matPaths.set(record.id, path)
     writeMaterialFile(path, {
       version: 1,

@@ -15,7 +15,6 @@ import NodeDock from '../components/NodeDock.vue'
 import PopupMenu from '../components/PopupMenu.vue'
 import SceneDock from '../components/SceneDock.vue'
 import SceneFileDialog from '../components/SceneFileDialog.vue'
-import ScriptDock from '../components/ScriptDock.vue'
 import ScriptScreen from '../components/ScriptScreen.vue'
 import TopBar from '../components/TopBar.vue'
 import Viewport from '../components/Viewport.vue'
@@ -23,7 +22,7 @@ import { useEditorStore } from '../stores/editor'
 import '../editor.css'
 
 const store = useEditorStore()
-const metrics = reactive({ left: 272, right: 340, bottom: 236, files: 200, script: 220, node: 280 })
+const metrics = reactive({ left: 272, right: 340, bottom: 236, files: 200, node: 280 })
 
 function styleVars(): Record<string, string> {
   return {
@@ -31,7 +30,6 @@ function styleVars(): Record<string, string> {
     '--right': `${metrics.right}px`,
     '--bottom': `${metrics.bottom}px`,
     '--files': `${metrics.files}px`,
-    '--script': `${metrics.script}px`,
     '--node': `${metrics.node}px`,
   }
 }
@@ -135,11 +133,6 @@ onBeforeUnmount(() => {
           @pointerdown="onSplit($event, 'y', (delta) => { metrics.node = clamp(metrics.node - delta, 140, 520) })"
         />
         <NodeDock />
-        <div
-          class="splitter h"
-          @pointerdown="onSplit($event, 'y', (delta) => { metrics.script = clamp(metrics.script - delta, 120, 520) })"
-        />
-        <ScriptDock />
       </aside>
     </div>
     <PopupMenu

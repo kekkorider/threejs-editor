@@ -48,7 +48,7 @@ When a feature lands, move it from **Not yet** into **Already in place**. Do not
 - Property filter.
 - Transform. New meshes start at position `[0, 0, 0]`, rotation `[0, 0, 0]`, scale `[1, 1, 1]`.
 - Geometry type and parameters, including shared geometry.
-- Mesh and Geometry groups on a mesh. Mesh has a resource slot for a mesh JSON file, plus the geometry type and parameters. Geometry has a Material Override slot for a `.tsl` file, plus the material name, TSL preset, cull mode, transparency, wireframe, and Cast Shadow. Drag a file from the File system onto the slot to assign it. The slot shows `[empty]` when nothing is assigned. Click the slot for New, Make Unique, Clear, and the other files of that type.
+- Mesh and Geometry groups on a mesh. Mesh has a resource slot for a mesh JSON file, plus the geometry type and parameters. Geometry has a Material Override slot for a material JSON file, plus the material name, TSL preset, cull mode, transparency, wireframe, and Cast Shadow. Drag a file from the File system onto the slot to assign it. The slot shows `[empty]` when nothing is assigned. Click the slot for New, Make Unique, Clear, and the other files of that type.
 - Projection holds the camera frustum. Camera holds Current, Preview, Sync Viewport, and Layers. View Offset stays its own group.
 - Light holds color, energy, ground, and Look at. Omni holds Range. Spot holds Range, Angle, and Penumbra.
 - Light color, energy, range, spot angle, penumbra, and Look at for directional and spot lights.
@@ -70,7 +70,7 @@ When a feature lands, move it from **Not yet** into **Already in place**. Do not
 - The File system dock shows that folder as a tree. A row shows the file name. The tooltip shows the `res://` path.
 - New Folder, Rename, Duplicate, and Delete work from the dock. Drag a file or folder onto a folder to move it. The open scene cannot be deleted. `settings.json` cannot be deleted.
 - A change in the folder updates the dock. An external change does not reload a scene that still shows `(*)`.
-- A scene is a `*.tscn` file. A mesh is `meshes/Name.json`. The File system row shows `Name`. A material is `materials/*.tsl`. A component is `components/*.ts`. The scene stores the mesh and material paths and does not embed those resources. Save Scene writes the files. Create, Make Unique, rename, and delete write the file at once. Apply writes the component file at once. A click on a `.json` file opens it in the Script dock. Shift and Ctrl select file rows the same way they select scene nodes. Undo and redo include file create, rename, move, duplicate, and delete.
+- A scene is a `*.tscn` file. A mesh is `meshes/Name.json`. A material is `materials/Name.json`. The File system row shows `Name` for both. A component is `components/*.ts`. The scene stores the mesh and material paths and does not embed those resources. Save Scene writes the files. Create, Make Unique, rename, and delete write the file at once. Apply writes the component file at once. Double-click a JSON file to edit it in the Script screen. A single click selects a component file. Double-click opens it in the Script screen. Renaming a component file renames that component in the scene tree. Shift and Ctrl select file rows the same way they select scene nodes. Undo and redo include file create, rename, move, duplicate, and delete.
 - `res://settings.json` stores the open scene path, physics, the preview sun, the preview environment, and global groups. The editor creates it with the defaults when it is missing. Scenes and these settings are not stored in browser storage. If the folder has no scene and the browser still has older saved scenes, the editor copies those scenes into the folder once.
 
 ### Resources
@@ -109,7 +109,7 @@ When a feature lands, move it from **Not yet** into **Already in place**. Do not
 ### Scripts
 
 - TSL stays the material script in the bottom panel.
-- The Script dock follows the selected node. The slot shows that node's script, or `[empty]` when it has none. Its menu attaches a script, switches among the scripts on that node, opens one in the Script screen, or detaches it. The source under the slot edits in place, and Apply writes the file. Drag a component from the File system onto the dock to attach it.
+- Double-click a component in the scene tree, or its script icon, to edit it in the Script screen. A single click selects the component. The screen lists open scripts. Closing one removes it from that list and leaves the file in the project.
 - A node with a script shows an icon on its scene-tree row. Clicking it opens that script in the dock and leaves the inspector on the node. Several scripts open a list. Right-click the node and choose Open Script to do the same.
 
 ### Groups and signals
