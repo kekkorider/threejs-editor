@@ -3710,27 +3710,11 @@ export class EditorState {
           ? [...this.components.values()].find((item) => item.name === className)
           : undefined
       }
-      if (!resource) {
-        const name = this.uniqueComponentName(ctor.name || 'Component')
-        const source = `// ${name} was already attached to an object.\n`
-        resource = {
-          id: `cmp${this.idCounter++}`,
-          name,
-          source,
-          path: uniqueFilePath('res://components', name, '.ts'),
-          builtin: false,
-          ctor,
-          error: null,
-        }
-        writeText(resource.path, source)
-        this.components.set(resource.id, resource)
-      }
+      // The starter cube already has behaviours. The saved scene replaces that
+      // cube on open. A missing project file must not become a new component.
+      if (!resource) continue
       this.trackInstance(node, resource, behaviour)
     }
-  }
-
-  private uniqueComponentName(raw: string): string {
-    return uniqueIdentifier(raw, this.componentNames())
   }
 
   /** File-system rename. The scene tree uses the new file name. */
