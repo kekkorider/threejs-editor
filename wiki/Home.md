@@ -47,10 +47,11 @@ This manual does not replace those files.
 
 ## Starter scene
 
-The first visit to `/editor` wraps the starter objects under a World root.
-The floor uses the UV material preset.
-The floor position is `[0, 0, 0]`.
-The starter cube position is `[0, 1.5, 0]`.
+The first visit to `/editor` wraps the starter object under a World root.
+The starter scene has one cube.
+The cube size is 1×1×1.
+The cube position is `[0, 0, 0]`.
+The cube uses the Lit material.
 A hemisphere light fills the scene.
 A directional light looks at the origin and casts shadows.
 

@@ -77,12 +77,12 @@ When a feature lands, move it from **Not yet** into **Already in place**. Do not
 
 - Primitive meshes under `res://meshes`.
 - TSL materials under `res://materials`, with presets (Lit, Metal, UV, Checker, and the others in the create dialog).
-- The starter floor uses the UV preset and sits at `[0, 0, 0]`. The starter cube sits at `[0, 1.5, 0]`.
+- The starter scene is one 1×1×1 cube at `[0, 0, 0]` with the Lit material.
 
 ### Lighting
 
 - An empty scene uses the preview sun and preview environment instead of baking default lights into the tree.
-- The floor is a lit standard material, so shadows are visible. The starter meshes cast shadows.
+- The starter cube uses the Lit preset and casts shadows.
 - Directional shadow coverage is wide enough for the floor. Spot and point lights cast shadows.
 - Point and spot energy stays bright out to Range instead of falling off with inverse-square decay.
 

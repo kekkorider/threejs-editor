@@ -1,14 +1,11 @@
-import spinSource from '../webgl/behaviors/Spin.ts?raw'
 import { defaultParams } from './geometry'
 import { GLOBAL_GROUPS_KEY } from './groups'
 import { PHYSICS_KEY } from './physicsSettings'
 import { PREVIEW_SUN_ENV_KEY } from './previewSunEnv'
 import {
   clearLegacyKeys,
-  hasFile,
   legacyJson,
   legacySceneBlob,
-  writeText,
 } from './projectFs'
 import {
   isSceneFile,
@@ -66,11 +63,10 @@ export function migrateScenes(raw: string, openPath: string | null): void {
   if (openPath) rememberOpenPath(openPath)
 }
 
-/** First project: World.json, the starter meshes and materials, and Spin.ts. */
+/** First project: World.json, one 1x1x1 cube, and the Lit material. */
 export function seedStarter(): void {
-  const floorParams = { ...defaultParams('box'), width: 10, height: 0.5, depth: 10 }
-  const cubeParams = defaultParams('box')
-  const uv = presetById('uv').source
+  const cubeParams = { ...defaultParams('box'), width: 1, height: 1, depth: 1 }
+  const lit = presetById('lit').source
   const flags = { ...DEFAULT_FLAGS }
   const file: SceneFile = {
     version: 1,
@@ -92,12 +88,10 @@ export function seedStarter(): void {
       position: { x: 0, y: 0, z: 0 },
     },
     geometries: [
-      { id: 'g1', name: 'Floor', type: 'box', params: floorParams },
-      { id: 'g2', name: 'Cube', type: 'box', params: cubeParams },
+      { id: 'g1', name: 'Cube', type: 'box', params: cubeParams },
     ],
     materials: [
-      { id: 'm1', name: 'UV', source: uv, ...flags },
-      { id: 'm2', name: 'Scale', source: uv, ...flags },
+      { id: 'm1', name: 'Lit', source: lit, ...flags },
     ],
     nodes: [
       {
@@ -120,7 +114,7 @@ export function seedStarter(): void {
       },
       {
         id: 'n1',
-        name: 'Floor',
+        name: 'Cube',
         kind: 'MeshInstance3D',
         parentId: 'root',
         position: [0, 0, 0],
@@ -128,32 +122,11 @@ export function seedStarter(): void {
         scale: [1, 1, 1],
         visible: true,
         castShadow: true,
-        receiveShadow: true,
+        receiveShadow: false,
         geometryId: 'g1',
         materialId: 'm1',
         light: null,
         components: [],
-        groups: [],
-        signals: [],
-      },
-      {
-        id: 'n2',
-        name: 'Cube',
-        kind: 'MeshInstance3D',
-        parentId: 'root',
-        position: [0, 1.5, 0],
-        rotation: [0, 0, 0],
-        scale: [1, 1, 1],
-        visible: true,
-        castShadow: true,
-        receiveShadow: false,
-        geometryId: 'g2',
-        materialId: 'm2',
-        light: null,
-        components: [
-          { name: 'Spin', enabled: true, parameters: { axis: 'y', speed: 1 } },
-          { name: 'Spin', enabled: true, parameters: { axis: 'z', speed: 0.87 } },
-        ],
         groups: [],
         signals: [],
       },
@@ -164,5 +137,4 @@ export function seedStarter(): void {
   }
   if (!isSceneFile(file)) throw new Error('Starter scene is invalid.')
   writeSceneFile(file)
-  if (!hasFile('res://components/Spin.ts')) writeText('res://components/Spin.ts', spinSource, true)
 }

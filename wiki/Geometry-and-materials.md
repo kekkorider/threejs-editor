@@ -76,7 +76,7 @@ A missing material id on load uses the Lit preset.
 Apply a preset from the Material section or from the AssetLib screen.
 The preset replaces the source.
 These are the preset names: Lit, Metal, UV, Checker, Fresnel, Stripes, Emissive Pulse, Vertex Wave, World Normal, and Marble.
-The starter floor uses UV.
+The starter cube uses Lit.
 
 ## See also
 

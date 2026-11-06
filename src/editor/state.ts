@@ -3429,7 +3429,7 @@ export class EditorState {
    * Point and spot lights use decay 0 so the Energy field stays bright out to Range.
    * Three's default decay of 2 is candela with inverse-square falloff, which makes
    * an energy of 2.4 invisible a couple of metres away. Directional and spot lights
-   * also get a shadow frustum large enough for the starter floor.
+   * also get a shadow frustum large enough for the default view.
    */
   private prepareLight(light: THREE.Light, lookAt: THREE.Vector3 | null): void {
     if (light instanceof THREE.PointLight || light instanceof THREE.SpotLight) light.decay = 0
