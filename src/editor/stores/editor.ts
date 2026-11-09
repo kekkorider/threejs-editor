@@ -23,9 +23,15 @@ import { EditorHistory, sameScene, type FileSnap, type HistoryRow, type Selectio
 import { hasSceneFile, normalizeScenePath, readSceneLibrary, sceneFileName, type SceneFile } from '../sceneFile'
 import {
   adoptSettingsFromCache,
+  binaryPaths,
+  bytesToBase64,
   duplicatePath,
   fileNameOf,
+  fileStem,
+  flushProjectWrites,
   hasEntry,
+  hasFile,
+  isBinaryPath,
   isMeshFile,
   isMaterialFile,
   isScenePath,
@@ -35,16 +41,36 @@ import {
   parentPath,
   projectDirectories,
   projectPaths,
+  readBytes,
   readCached,
+  readSettings,
   removePath,
   restoreFileSnaps,
   SETTINGS_PATH,
+  writeBytes,
+  writeSettings,
   writeText,
   snapshotTree,
   subscribe as subscribeProject,
   uniqueDirectory,
+  uniqueFilePath,
   type FsEntry,
 } from '../projectFs'
+import { importAudioBuffer, playbackBuffer } from '../importAudio'
+import {
+  IMPORTER_LABEL,
+  coerceImportParams,
+  defaultImportParams,
+  importerForPath,
+  isModelFile,
+  makeImportFile,
+  readImportFile,
+  unsupportedTextureMode,
+  writeImportFile,
+  type ImporterId,
+  type ImportValue,
+} from '../importSettings'
+import { previewFor, runImport, sceneNote } from '../importRun'
 import {
   ShaderGraphClient,
   graphHasNodes,
@@ -278,6 +304,18 @@ export const useEditorStore = defineStore('editor', () => {
   const expandedFiles = ref(directoryPaths(snapshotTree()))
   const fileSelection = ref<string[]>([])
   const focusDock = ref<'scene' | 'files'>('scene')
+  const leftDock = ref<'scene' | 'import'>('scene')
+  const importDirty = ref(false)
+  const importBusy = ref(false)
+  const importMulti = ref(false)
+  const importAs = ref<ImporterId | null>(null)
+  const importPaths = ref<string[]>([])
+  const importParams = ref<Record<string, ImportValue>>({})
+  const importChecked = ref<string[]>([])
+  const importNote = ref('')
+  const importPreview = ref<string | null>(null)
+  const importMessage = ref('Select a resource file in the filesystem or in the inspector to adjust import settings.')
+  const importWarning = ref('')
   const openJsonPaths = ref<string[]>([])
   const editorKind = ref<'script' | 'json'>('script')
   const jsonPath = ref<string | null>(null)
@@ -742,21 +780,31 @@ export const useEditorStore = defineStore('editor', () => {
     touch(options?.material)
   }
 
-  function projectSnap(): { files: Map<string, string>, dirs: Set<string> } {
+  function projectSnap(): { files: Map<string, string>, dirs: Set<string>, binaries: Set<string> } {
     const fileMap = new Map<string, string>()
-    for (const path of projectPaths()) fileMap.set(path, readCached(path) ?? '')
-    return { files: fileMap, dirs: new Set(projectDirectories()) }
+    const binarySet = new Set<string>()
+    for (const path of projectPaths()) {
+      if (path.split('/').some((part) => part.startsWith('.'))) continue
+      fileMap.set(path, readCached(path) ?? '')
+    }
+    for (const path of binaryPaths()) {
+      const bytes = readBytes(path)
+      if (!bytes) continue
+      fileMap.set(path, bytesToBase64(bytes))
+      binarySet.add(path)
+    }
+    return { files: fileMap, dirs: new Set(projectDirectories()), binaries: binarySet }
   }
 
-  function snapAt(snap: { files: Map<string, string>, dirs: Set<string> }, path: string): FileSnap {
-    if (snap.files.has(path)) return { path, text: snap.files.get(path) ?? '' }
+  function snapAt(snap: { files: Map<string, string>, dirs: Set<string>, binaries?: Set<string> }, path: string): FileSnap {
+    if (snap.files.has(path)) return { path, text: snap.files.get(path) ?? '', binary: snap.binaries?.has(path) ?? false }
     if (snap.dirs.has(path)) return { path, text: null, directory: true }
     return { path, text: null }
   }
 
   function diffProject(
-    before: { files: Map<string, string>, dirs: Set<string> },
-    after: { files: Map<string, string>, dirs: Set<string> },
+    before: { files: Map<string, string>, dirs: Set<string>, binaries?: Set<string> },
+    after: { files: Map<string, string>, dirs: Set<string>, binaries?: Set<string> },
   ): { filesBefore: FileSnap[], filesAfter: FileSnap[] } | null {
     const paths = new Set<string>([...before.files.keys(), ...after.files.keys(), ...before.dirs, ...after.dirs])
     const filesBefore: FileSnap[] = []
@@ -764,7 +812,7 @@ export const useEditorStore = defineStore('editor', () => {
     for (const path of paths) {
       const left = snapAt(before, path)
       const right = snapAt(after, path)
-      if (left.text === right.text && left.directory === right.directory) continue
+      if (left.text === right.text && left.directory === right.directory && left.binary === right.binary) continue
       filesBefore.push(left)
       filesAfter.push(right)
     }
@@ -3684,6 +3732,13 @@ export const useEditorStore = defineStore('editor', () => {
         return
       }
     }
+    const users = engine.importUsers(path)
+    if (users.length > 0) {
+      engine.log(`${path} is instanced by ${users.join(', ')}. Remove those instances first.`, 'warn')
+      bottomTab.value = 'output'
+      touch()
+      return
+    }
     recordFiles(`Delete ${fileNameOf(path)}`, () => {
       engine.releaseResourcePath(path)
       removePath(path)
@@ -3731,6 +3786,10 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   function editProjectPath(path: string): void {
+    if (importerForPath(path)) {
+      leftDock.value = 'import'
+      return
+    }
     if (path.endsWith('.ts')) {
       const component = componentFiles.value.find((file) => file.path === path)
       if (component) showScript(component.id)
@@ -3811,6 +3870,12 @@ export const useEditorStore = defineStore('editor', () => {
         finishDeleteComponentNow(resource.id)
         return
       }
+    }
+    const users = engine.importUsers(path)
+    if (users.length > 0) {
+      engine.log(`${path} is instanced by ${users.join(', ')}. Remove those instances first.`, 'warn')
+      bottomTab.value = 'output'
+      return
     }
     engine.releaseResourcePath(path)
     removePath(path)
@@ -3909,6 +3974,364 @@ export const useEditorStore = defineStore('editor', () => {
     showPopup(new DOMRect(x, y, 0, 0), items, false)
   }
 
+  const pendingImport = new Set<string>()
+  let importPreviewBlob: string | null = null
+  let previewAudio: { context: AudioContext, source: AudioBufferSourceNode } | null = null
+
+  function savedImportParams(importer: ImporterId): Record<string, ImportValue> {
+    const saved = readSettings().importDefaults[importer] ?? {}
+    return coerceImportParams(importer, { ...defaultImportParams(importer), ...saved })
+  }
+
+  function setImportPreview(url: string | null): void {
+    if (importPreviewBlob && importPreviewBlob !== url) URL.revokeObjectURL(importPreviewBlob)
+    importPreviewBlob = url?.startsWith('blob:') ? url : null
+    importPreview.value = url
+  }
+
+  function stopImportPreview(): void {
+    const current = previewAudio
+    previewAudio = null
+    if (!current) return
+    try {
+      current.source.stop()
+    } catch {
+      // The clip already ended.
+    }
+    void current.context.close()
+  }
+
+  function pushFileStep(
+    label: string,
+    before: SceneFile | null,
+    beforeFiles: { files: Map<string, string>, dirs: Set<string>, binaries: Set<string> },
+    beforeSelection: SelectionBookmark,
+  ): void {
+    const after = takeSnapshot()
+    const files = before && after ? diffProject(beforeFiles, projectSnap()) : null
+    if (before && after && (files || !sameScene(before, after))) {
+      history.push({
+        label,
+        before,
+        after,
+        beforeSelection,
+        afterSelection: bookmark(),
+        filesBefore: files?.filesBefore,
+        filesAfter: files?.filesAfter,
+        at: Date.now(),
+      }, false)
+      historyTick.value += 1
+    }
+    refreshProjectTree()
+    touch()
+  }
+
+  function loadImportFromSelection(): void {
+    stopImportPreview()
+    const paths = fileSelection.value.filter((path) => importerForPath(path))
+    if (paths.length === 0) {
+      importPaths.value = []
+      importAs.value = null
+      importMulti.value = false
+      importParams.value = {}
+      importChecked.value = []
+      importDirty.value = false
+      importNote.value = ''
+      importWarning.value = ''
+      setImportPreview(null)
+      importMessage.value = 'Select a resource file in the filesystem or in the inspector to adjust import settings.'
+      return
+    }
+    const kinds = new Set(paths.map((path) => readImportFile(path)?.importer ?? importerForPath(path)))
+    if (kinds.size > 1) {
+      importPaths.value = paths
+      importAs.value = null
+      importMulti.value = false
+      importParams.value = {}
+      importChecked.value = []
+      importDirty.value = false
+      importNote.value = ''
+      importWarning.value = ''
+      setImportPreview(null)
+      importMessage.value = 'Select files of the same type to edit them together.'
+      return
+    }
+    const importer = [...kinds][0] ?? null
+    const first = readImportFile(paths[0] ?? '')
+    importPaths.value = paths
+    importAs.value = importer
+    importMulti.value = paths.length > 1
+    importParams.value = { ...(first?.params ?? (importer ? savedImportParams(importer) : {})) }
+    importChecked.value = []
+    importDirty.value = false
+    importMessage.value = ''
+    importWarning.value = importer === 'texture' ? 'VRAM Compressed, VRAM Uncompressed, and Basis Universal open as Lossless.' : ''
+    if (paths.length > 1) importNote.value = `${paths.length} files.`
+    else if (importer === 'keep') importNote.value = 'Kept as is.'
+    else if (importer === 'scene') importNote.value = sceneNote(importParams.value)
+    else importNote.value = ''
+    const source = paths[0] ?? ''
+    setImportPreview(importer && importer !== 'keep' ? previewFor(source, importer, first?.dest ?? source) : null)
+  }
+
+  function setImportAs(importer: ImporterId): void {
+    if (importAs.value === importer) return
+    importAs.value = importer
+    importParams.value = importer === 'keep' ? {} : { ...savedImportParams(importer) }
+    importChecked.value = importMulti.value ? Object.keys(importParams.value) : []
+    importDirty.value = true
+    importWarning.value = importer === 'texture' ? 'VRAM Compressed, VRAM Uncompressed, and Basis Universal open as Lossless.' : ''
+    if (importer === 'keep') importNote.value = 'Kept as is.'
+    else if (importer === 'scene') importNote.value = sceneNote(importParams.value)
+  }
+
+  function setImportParam(name: string, value: ImportValue): void {
+    importParams.value = { ...importParams.value, [name]: value }
+    importDirty.value = true
+    if (importMulti.value && !importChecked.value.includes(name)) importChecked.value = [...importChecked.value, name]
+    if (importAs.value === 'scene') importNote.value = sceneNote(importParams.value)
+    const mode = name === 'compress/mode' ? unsupportedTextureMode(value) : null
+    if (mode) importWarning.value = `${mode} opens as Lossless.`
+  }
+
+  function setImportChecked(name: string, checked: boolean): void {
+    importChecked.value = checked
+      ? [...importChecked.value, name]
+      : importChecked.value.filter((item) => item !== name)
+    if (checked) importDirty.value = true
+  }
+
+  function openImportPresetMenu(anchor: HTMLElement): void {
+    const importer = importAs.value
+    if (!importer || importer === 'keep') return
+    const label = IMPORTER_LABEL[importer]
+    showPopup(anchor.getBoundingClientRect(), [
+      { label: 'Default', action: () => applyImportPreset(defaultImportParams(importer)) },
+      { label: `Set as Default for '${label}'`, action: () => saveImportDefault(importer) },
+      { label: 'Load Default', action: () => applyImportPreset(savedImportParams(importer)) },
+      { label: 'Clear Default', action: () => clearImportDefault(importer) },
+    ], false)
+  }
+
+  function applyImportPreset(params: Record<string, ImportValue>): void {
+    importParams.value = { ...params }
+    importDirty.value = true
+    if (importMulti.value) importChecked.value = Object.keys(params)
+    if (importAs.value === 'scene') importNote.value = sceneNote(params)
+  }
+
+  function saveImportDefault(importer: ImporterId): void {
+    const settings = readSettings()
+    settings.importDefaults[importer] = { ...importParams.value }
+    writeSettings(settings)
+    engine.log(`Saved the default for ${IMPORTER_LABEL[importer]}.`)
+  }
+
+  function clearImportDefault(importer: ImporterId): void {
+    const settings = readSettings()
+    delete settings.importDefaults[importer]
+    writeSettings(settings)
+    engine.log(`Cleared the default for ${IMPORTER_LABEL[importer]}.`)
+  }
+
+  async function runImportOn(path: string): Promise<{ note: string, previewUrl: string | null }> {
+    const outcome = await runImport(path)
+    if (isModelFile(path)) await engine.reloadImported(path)
+    return { note: outcome.note, previewUrl: outcome.previewUrl }
+  }
+
+  async function reimportFiles(): Promise<void> {
+    const importer = importAs.value
+    const paths = [...importPaths.value]
+    if (!importer || paths.length === 0 || importBusy.value) return
+    importBusy.value = true
+    const before = takeSnapshot()
+    const beforeFiles = projectSnap()
+    const beforeSelection = bookmark()
+    let note = ''
+    let preview: string | null = null
+    try {
+      for (const path of paths) {
+        const current = readImportFile(path)
+        if (importer === 'keep') {
+          writeImportFile(makeImportFile(path, 'keep', {}, path))
+          continue
+        }
+        const params = { ...(current?.params ?? savedImportParams(importer)) }
+        if (importMulti.value) {
+          for (const key of importChecked.value) {
+            const value = importParams.value[key]
+            if (value !== undefined) params[key] = value
+          }
+        } else {
+          for (const [key, value] of Object.entries(importParams.value)) params[key] = value
+        }
+        writeImportFile(makeImportFile(path, importer, params, current?.dest ?? path))
+      }
+      await flushProjectWrites()
+      for (const path of paths) {
+        const outcome = await runImportOn(path)
+        note = paths.length > 1 ? `Reimported ${paths.length} files.` : outcome.note
+        if (outcome.previewUrl) preview = outcome.previewUrl
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      engine.log(`Could not reimport: ${message}`, 'error')
+      bottomTab.value = 'output'
+    } finally {
+      importBusy.value = false
+    }
+    loadImportFromSelection()
+    importDirty.value = false
+    if (note) importNote.value = note
+    const source = paths[0] ?? ''
+    const file = readImportFile(source)
+    const shown = file && importer !== 'keep' ? previewFor(source, importer, file.dest) : null
+    if (shown || preview) setImportPreview(shown ?? preview)
+    pushFileStep(paths.length > 1 ? `Reimport ${paths.length} files` : `Reimport ${fileNameOf(source)}`, before, beforeFiles, beforeSelection)
+  }
+
+  async function ensureImports(paths?: string[]): Promise<void> {
+    const source = paths ?? [...projectPaths(), ...binaryPaths()]
+    const fresh = source.filter((path) => {
+      if (pendingImport.has(path)) return false
+      return !!importerForPath(path) && hasFile(path) && !readImportFile(path)
+    })
+    for (const path of fresh) pendingImport.add(path)
+    for (const path of fresh) {
+      const importer = importerForPath(path)
+      try {
+        if (!importer || readImportFile(path) || !hasFile(path)) continue
+        writeImportFile(makeImportFile(path, importer, savedImportParams(importer)))
+        await flushProjectWrites()
+        await runImportOn(path)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        engine.log(`Could not import ${path}: ${message}`, 'error')
+      } finally {
+        pendingImport.delete(path)
+      }
+    }
+    if (fresh.length > 0 && leftDock.value === 'import' && !importDirty.value) loadImportFromSelection()
+  }
+
+  async function importExternalFiles(list: FileList | File[], dir: string): Promise<void> {
+    const incoming = [...list]
+    if (incoming.length === 0) return
+    const before = takeSnapshot()
+    const beforeFiles = projectSnap()
+    const beforeSelection = bookmark()
+    const written: string[] = []
+    for (const file of incoming) {
+      const cleaned = file.name.trim().replace(/[^A-Za-z0-9._-]+/g, '')
+      const dot = cleaned.lastIndexOf('.')
+      const ext = dot > 0 ? cleaned.slice(dot).toLowerCase() : ''
+      const stem = fileStem(dot > 0 ? cleaned.slice(0, dot) : cleaned)
+      const path = uniqueFilePath(dir, stem, ext)
+      const bytes = new Uint8Array(await file.arrayBuffer())
+      const importer = importerForPath(path)
+      if (importer) writeImportFile(makeImportFile(path, importer, savedImportParams(importer)))
+      if (isBinaryPath(path)) writeBytes(path, bytes)
+      else writeText(path, new TextDecoder().decode(bytes))
+      written.push(path)
+    }
+    await flushProjectWrites()
+    for (const path of written) {
+      if (!importerForPath(path)) continue
+      try {
+        await runImportOn(path)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        engine.log(`Could not import ${path}: ${message}`, 'error')
+      }
+    }
+    fileSelection.value = written
+    fileAnchor = written[0] ?? fileAnchor
+    if (written.some((path) => importerForPath(path))) leftDock.value = 'import'
+    pushFileStep(
+      written.length === 1 ? `Import ${fileNameOf(written[0] ?? '')}` : `Import ${written.length} files`,
+      before,
+      beforeFiles,
+      beforeSelection,
+    )
+    if (leftDock.value === 'import') loadImportFromSelection()
+  }
+
+  async function instanceImportedModel(path: string, parentId: string | null): Promise<void> {
+    if (playing.value) {
+      engine.log('Stop the scene before instancing.', 'warn')
+      return
+    }
+    const before = takeSnapshot()
+    const beforeFiles = projectSnap()
+    const beforeSelection = bookmark()
+    if (!readImportFile(path)) {
+      const importer = importerForPath(path)
+      if (importer) {
+        writeImportFile(makeImportFile(path, importer, savedImportParams(importer)))
+        await flushProjectWrites()
+        try {
+          await runImport(path)
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          engine.log(`Could not import ${path}: ${message}`, 'error')
+        }
+      }
+    }
+    await engine.instanceImportedModel(path, parentId)
+    const stem = fileNameOf(path).replace(/\.[^.]+$/, '')
+    pushFileStep(`Instance ${stem}`, before, beforeFiles, beforeSelection)
+  }
+
+  async function playImportPreview(): Promise<void> {
+    stopImportPreview()
+    const path = importPaths.value[0]
+    const importer = importAs.value
+    if (!path || importer !== 'wav' && importer !== 'mp3' && importer !== 'oggvorbis') return
+    const bytes = readBytes(path)
+    if (!bytes) return
+    const context = new AudioContext()
+    try {
+      const stored = importAudioBuffer(path)
+      const decoded = stored ?? await context.decodeAudioData(copyPcm(bytes))
+      const played = playbackBuffer(decoded, importParams.value, context)
+      const source = context.createBufferSource()
+      source.buffer = played.buffer
+      source.loop = played.loop
+      source.loopStart = played.loopStart
+      source.loopEnd = played.loopEnd
+      source.connect(context.destination)
+      source.onended = () => {
+        if (previewAudio?.source !== source) return
+        previewAudio = null
+        void context.close()
+      }
+      previewAudio = { context, source }
+      source.start()
+    } catch (error) {
+      void context.close()
+      const message = error instanceof Error ? error.message : String(error)
+      engine.log(`Could not play ${path}: ${message}`, 'error')
+    }
+  }
+
+  function copyPcm(bytes: Uint8Array): ArrayBuffer {
+    const copy = new ArrayBuffer(bytes.byteLength)
+    new Uint8Array(copy).set(bytes)
+    return copy
+  }
+
+  engine.notify = () => {
+    if (!replaying) touch()
+  }
+
+  watch(fileSelection, () => {
+    if (leftDock.value === 'import') loadImportFromSelection()
+  })
+  watch(leftDock, (tab) => {
+    if (tab === 'import') loadImportFromSelection()
+  })
+
   subscribeProject((changed) => {
     projectTree.value = snapshotTree()
     for (const path of changed) {
@@ -3917,8 +4340,12 @@ export const useEditorStore = defineStore('editor', () => {
         if (!engine.sceneDirty) engine.reloadResourceFile(path)
       } else if (path === engine.scenePath && !engine.sceneDirty) engine.loadOpenScene()
     }
+    const fresh = changed.filter((path) => importerForPath(path) && hasFile(path) && !readImportFile(path))
+    if (fresh.length > 0 && !replaying) void ensureImports(fresh)
     touch()
   })
+
+  void ensureImports()
 
   function onPointerDown(event: PointerEvent): void {
     const target = event.target instanceof Element
@@ -3963,6 +4390,26 @@ export const useEditorStore = defineStore('editor', () => {
     renamingFile,
     expandedFiles,
     fileSelection,
+    leftDock,
+    importDirty,
+    importBusy,
+    importMulti,
+    importAs,
+    importPaths,
+    importParams,
+    importChecked,
+    importNote,
+    importPreview,
+    importMessage,
+    importWarning,
+    setImportAs,
+    setImportParam,
+    setImportChecked,
+    openImportPresetMenu,
+    reimportFiles,
+    importExternalFiles,
+    instanceImportedModel,
+    playImportPreview,
     jsonPath,
     openJsonPaths,
     editorKind,

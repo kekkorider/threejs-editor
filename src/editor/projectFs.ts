@@ -42,6 +42,8 @@ export interface ProjectSettings {
   previewSunEnv: PreviewSunEnvState
   globalGroups: GroupRecord[]
   layout: PanelLayout
+  /** Saved Import dock defaults, keyed by importer name. */
+  importDefaults: Record<string, Record<string, boolean | number | string>>
 }
 
 export interface MeshFile {
@@ -83,7 +85,10 @@ interface ServerEntry {
 }
 
 const files = new Map<string, string>()
+const binaries = new Map<string, Uint8Array>()
 const directories = new Set<string>()
+const BYTES_URL = '/__editor/fs/bytes'
+const BINARY_EXT = new Set(['.png', '.jpg', '.jpeg', '.webp', '.hdr', '.exr', '.glb', '.wav', '.mp3', '.ogg', '.oga'])
 let tree: FsEntry[] = []
 let settings: ProjectSettings = defaultProjectSettings()
 let booted = false
@@ -104,6 +109,7 @@ export function defaultProjectSettings(): ProjectSettings {
     previewSunEnv: defaultPreviewSunEnvState(),
     globalGroups: [],
     layout: { ...DEFAULT_PANEL_LAYOUT },
+    importDefaults: {},
   }
 }
 
@@ -119,6 +125,7 @@ export function readSettings(): ProjectSettings {
     },
     globalGroups: settings.globalGroups.map((record) => ({ ...record })),
     layout: { ...settings.layout },
+    importDefaults: copyImportDefaults(settings.importDefaults),
   }
 }
 
@@ -134,6 +141,7 @@ export function writeSettings(next: ProjectSettings): void {
     },
     globalGroups: next.globalGroups.map((record) => ({ ...record })),
     layout: { ...next.layout },
+    importDefaults: copyImportDefaults(next.importDefaults),
   }
   writeText(SETTINGS_PATH, `${JSON.stringify(settings, null, 2)}\n`)
 }
@@ -153,15 +161,46 @@ export function readCached(path: string): string | null {
 }
 
 export function hasFile(path: string): boolean {
-  return files.has(path)
+  return files.has(path) || binaries.has(path)
 }
 
 export function hasEntry(path: string): boolean {
-  return files.has(path) || directories.has(path)
+  return files.has(path) || binaries.has(path) || directories.has(path)
 }
 
 export function projectPaths(): string[] {
   return [...files.keys()]
+}
+
+/** Image, model, and audio bytes. Text files stay in `projectPaths`. */
+export function isBinaryPath(path: string): boolean {
+  const dot = path.lastIndexOf('.')
+  if (dot <= path.lastIndexOf('/')) return false
+  return BINARY_EXT.has(path.slice(dot).toLowerCase())
+}
+
+/** `.import` sidecars and files under a dot folder stay out of the File system tree. */
+export function isHiddenProjectPath(path: string): boolean {
+  if (path.endsWith('.import')) return true
+  return path.split('/').some((part) => part.startsWith('.'))
+}
+
+export function binaryPaths(): string[] {
+  return [...binaries.keys()]
+}
+
+export function readBytes(path: string): Uint8Array | null {
+  return binaries.get(path) ?? null
+}
+
+/** URL the dev server uses to read a project file, including files under `.godot`. */
+export function rawUrl(path: string): string {
+  const rel = path.startsWith('res://') ? path.slice('res://'.length) : path
+  return `/__editor/fs/raw/${rel.split('/').map((part) => encodeURIComponent(part)).join('/')}`
+}
+
+export function flushProjectWrites(): Promise<void> {
+  return diskQueue
 }
 
 export function projectDirectories(): string[] {
@@ -220,6 +259,23 @@ export function writeText(path: string, text: string, quiet = false): void {
   if (!quiet) emit([path])
 }
 
+export function writeBytes(path: string, data: Uint8Array, quiet = false): void {
+  if (!path.startsWith('res://') || path.includes('..')) return
+  const copy = new Uint8Array(data)
+  const hidden = isHiddenProjectPath(path)
+  if (hidden) binaries.delete(path)
+  else binaries.set(path, copy)
+  files.delete(path)
+  freshWrites.set(path, Date.now())
+  if (!hidden) rememberDirectory(parentPath(path))
+  tree = buildTree()
+  enqueue(async () => {
+    await putBytes(path, copy)
+    await pullChanges()
+  })
+  if (!quiet && !hidden) emit([path])
+}
+
 export function mkdirPath(path: string): void {
   rememberDirectory(path)
   tree = buildTree()
@@ -238,9 +294,27 @@ export function movePath(from: string, to: string): void {
     if (next !== path) movedFiles.push([path, next])
   }
   for (const [path, next] of movedFiles) {
-    const text = files.get(path)
+    let text = files.get(path)
     files.delete(path)
+    if (text !== undefined && next.endsWith('.import')) text = text.replaceAll(from, to)
     if (text !== undefined) files.set(next, text)
+  }
+  const movedBins: [string, string][] = []
+  for (const path of binaries.keys()) {
+    const next = retarget(path, from, to)
+    if (next !== path) movedBins.push([path, next])
+  }
+  for (const [path, next] of movedBins) {
+    const data = binaries.get(path)
+    binaries.delete(path)
+    if (data) binaries.set(next, data)
+  }
+  const sideFrom = `${from}.import`
+  const sideTo = `${to}.import`
+  if (files.has(sideFrom) && sideFrom !== sideTo) {
+    const text = (files.get(sideFrom) ?? '').replaceAll(from, to)
+    files.delete(sideFrom)
+    files.set(sideTo, text)
   }
   const movedDirs = [...directories].filter((dir) => dir === from || dir.startsWith(`${from}/`))
   for (const dir of movedDirs) directories.delete(dir)
@@ -251,9 +325,21 @@ export function movePath(from: string, to: string): void {
     const text = files.get(path)
     if (text !== undefined) dirty.set(path, text)
   }
+  if (sideFrom !== sideTo) {
+    const text = files.get(sideTo)
+    if (text !== undefined) dirty.set(sideTo, text)
+  }
+  for (const [, next] of movedFiles) {
+    if (!next.endsWith('.import')) continue
+    const text = files.get(next)
+    if (text !== undefined) dirty.set(next, text)
+  }
   tree = buildTree()
   enqueue(async () => {
     await sendJson('/__editor/fs/move', { from, to })
+    if (sideFrom !== sideTo && from !== 'res://') {
+      await sendJson('/__editor/fs/move', { from: sideFrom, to: sideTo }).catch(() => undefined)
+    }
     for (const [path, text] of dirty) {
       files.set(path, text)
       freshWrites.set(path, Date.now())
@@ -267,7 +353,10 @@ export function movePath(from: string, to: string): void {
 export function removePath(path: string): void {
   if (path === SETTINGS_PATH) return
   for (const key of [...files.keys()]) {
-    if (key === path || key.startsWith(`${path}/`)) files.delete(key)
+    if (key === path || key.startsWith(`${path}/`) || key === `${path}.import`) files.delete(key)
+  }
+  for (const key of [...binaries.keys()]) {
+    if (key === path || key.startsWith(`${path}/`)) binaries.delete(key)
   }
   for (const dir of [...directories]) {
     if (dir === path || dir.startsWith(`${path}/`)) directories.delete(dir)
@@ -276,12 +365,21 @@ export function removePath(path: string): void {
   enqueue(async () => {
     const response = await fetch(`${FILE_URL}?path=${encodeURIComponent(path)}`, { method: 'DELETE' })
     if (!response.ok) throw new Error(`Could not delete ${path} (${response.status}).`)
+    await fetch(`${FILE_URL}?path=${encodeURIComponent(`${path}.import`)}`, { method: 'DELETE' })
     await pullChanges()
   })
   emit([])
 }
 
 export function duplicatePath(path: string): string | null {
+  const bytes = binaries.get(path)
+  if (bytes) {
+    const next = uniqueCopyPath(path)
+    writeBytes(next, bytes)
+    const side = files.get(`${path}.import`)
+    if (side !== undefined) writeText(`${next}.import`, side.replaceAll(path, next))
+    return next
+  }
   const text = files.get(path)
   if (text === undefined) return null
   const next = uniqueCopyPath(path)
@@ -334,7 +432,7 @@ export function joinRes(dir: string, name: string): string {
 export function uniqueFilePath(dir: string, stem: string, ext: string, ignore?: string): string {
   let path = joinRes(dir, `${stem}${ext}`)
   let index = 2
-  while ((files.has(path) || directories.has(path)) && path !== ignore) {
+  while ((files.has(path) || binaries.has(path) || directories.has(path)) && path !== ignore) {
     path = joinRes(dir, `${stem}${index}${ext}`)
     index += 1
   }
@@ -344,7 +442,7 @@ export function uniqueFilePath(dir: string, stem: string, ext: string, ignore?: 
 export function uniqueDirectory(parent: string, stem: string): string {
   let path = joinRes(parent, stem)
   let index = 2
-  while (files.has(path) || directories.has(path)) {
+  while (files.has(path) || binaries.has(path) || directories.has(path)) {
     path = joinRes(parent, `${stem}${index}`)
     index += 1
   }
@@ -408,14 +506,31 @@ export function readMaterialFile(path: string): MaterialFile | null {
 }
 
 /** Put each path back to the text it had. Null text removes the path. */
-export function restoreFileSnaps(snaps: readonly { path: string, text: string | null, directory?: boolean }[]): void {
+export function restoreFileSnaps(snaps: readonly { path: string, text: string | null, directory?: boolean, binary?: boolean }[]): void {
   for (const snap of snaps) {
     if (snap.text === null && !snap.directory) removePath(snap.path)
   }
   for (const snap of snaps) {
     if (snap.directory) mkdirPath(snap.path)
+    else if (snap.binary && snap.text !== null) writeBytes(snap.path, base64ToBytes(snap.text), true)
     else if (snap.text !== null) writeText(snap.path, snap.text, true)
   }
+}
+
+export function bytesToBase64(data: Uint8Array): string {
+  let binary = ''
+  const step = 0x8000
+  for (let index = 0; index < data.length; index += step) {
+    binary += String.fromCharCode(...data.subarray(index, index + step))
+  }
+  return btoa(binary)
+}
+
+export function base64ToBytes(value: string): Uint8Array {
+  const binary = atob(value)
+  const data = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) data[index] = binary.charCodeAt(index)
+  return data
 }
 
 export function retarget(path: string, from: string, to: string): string {
@@ -504,12 +619,21 @@ async function pullAll(): Promise<void> {
   directories.clear()
   collectDirs(entries, directories)
   const next = new Map<string, string>()
+  const nextBins = new Map<string, Uint8Array>()
   await Promise.all(paths.map(async (path) => {
+    if (isBinaryPath(path)) {
+      const cached = binaries.get(path)
+      const bytes = (freshWrites.get(path) ?? 0) > Date.now() - 500 && cached ? cached : await fetchBytes(path)
+      if (bytes) nextBins.set(path, bytes)
+      return
+    }
     const text = await fetchFile(path)
     if (text !== null) next.set(path, text)
   }))
   files.clear()
+  binaries.clear()
   for (const [path, text] of next) files.set(path, text)
+  for (const [path, bytes] of nextBins) binaries.set(path, bytes)
   tree = buildTree()
 }
 
@@ -536,8 +660,22 @@ async function pullChanges(): Promise<string[]> {
       changed.push(path)
     }
   }
+  for (const path of [...binaries.keys()]) {
+    if (!paths.has(path)) {
+      binaries.delete(path)
+      changed.push(path)
+    }
+  }
   await Promise.all([...paths].map(async (path) => {
     if ((freshWrites.get(path) ?? 0) > Date.now() - 500) return
+    if (isBinaryPath(path)) {
+      const bytes = await fetchBytes(path)
+      if (!bytes) return
+      const previousBytes = binaries.get(path)
+      if (!previousBytes || previousBytes.byteLength !== bytes.byteLength) changed.push(path)
+      binaries.set(path, bytes)
+      return
+    }
     const text = await fetchFile(path)
     if (text === null) return
     if (previous.get(path) !== text) changed.push(path)
@@ -566,6 +704,24 @@ async function fetchFile(path: string): Promise<string | null> {
   if (!response.ok) throw new Error(`Could not read ${path} (${response.status}).`)
   const body = await response.json() as { text?: string }
   return typeof body.text === 'string' ? body.text : null
+}
+
+async function fetchBytes(path: string): Promise<Uint8Array | null> {
+  const response = await fetch(rawUrl(path))
+  if (response.status === 404) return null
+  if (!response.ok) throw new Error(`Could not read ${path} (${response.status}).`)
+  return new Uint8Array(await response.arrayBuffer())
+}
+
+async function putBytes(path: string, data: Uint8Array): Promise<void> {
+  const body = new ArrayBuffer(data.byteLength)
+  new Uint8Array(body).set(data)
+  const response = await fetch(`${BYTES_URL}?path=${encodeURIComponent(path)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body,
+  })
+  if (!response.ok) throw new Error(`Could not write ${path} (${response.status}).`)
 }
 
 async function putFile(path: string, text: string): Promise<void> {
@@ -622,7 +778,14 @@ function buildTree(): FsEntry[] {
   }
   const paths = [...files.keys()].sort((a, b) => a.localeCompare(b))
   for (const path of paths) {
+    if (isHiddenProjectPath(path)) continue
     const parent = byPath.get(parentPath(path)) ?? root
+    parent.children.push({ name: fileNameOf(path), path, kind: 'file', children: [] })
+  }
+  for (const path of [...binaries.keys()].sort((a, b) => a.localeCompare(b))) {
+    if (isHiddenProjectPath(path)) continue
+    const parent = byPath.get(parentPath(path)) ?? root
+    if (parent.children.some((child) => child.path === path)) continue
     parent.children.push({ name: fileNameOf(path), path, kind: 'file', children: [] })
   }
   sortEntry(root)
@@ -662,6 +825,30 @@ function clampLayout(layout: PanelLayout): PanelLayout {
   }
 }
 
+function copyImportDefaults(
+  value: Record<string, Record<string, boolean | number | string>>,
+): Record<string, Record<string, boolean | number | string>> {
+  const next: Record<string, Record<string, boolean | number | string>> = {}
+  for (const [importer, params] of Object.entries(value)) {
+    next[importer] = { ...params }
+  }
+  return next
+}
+
+function importDefaultsFromUnknown(value: unknown): Record<string, Record<string, boolean | number | string>> {
+  if (!value || typeof value !== 'object') return {}
+  const next: Record<string, Record<string, boolean | number | string>> = {}
+  for (const [importer, params] of Object.entries(value)) {
+    if (!params || typeof params !== 'object') continue
+    const record: Record<string, boolean | number | string> = {}
+    for (const [key, item] of Object.entries(params)) {
+      if (typeof item === 'boolean' || typeof item === 'number' || typeof item === 'string') record[key] = item
+    }
+    next[importer] = record
+  }
+  return next
+}
+
 function layoutFromUnknown(value: unknown): PanelLayout {
   const fallback = DEFAULT_PANEL_LAYOUT
   const source = value && typeof value === 'object' ? value as Partial<PanelLayout> : {}
@@ -687,6 +874,7 @@ function parseSettings(text: string): ProjectSettings {
       previewSunEnv: previewFromUnknown(parsed.previewSunEnv),
       globalGroups: groupsFromUnknown(parsed.globalGroups),
       layout: layoutFromUnknown((parsed as { layout?: unknown }).layout),
+      importDefaults: importDefaultsFromUnknown((parsed as { importDefaults?: unknown }).importDefaults),
     }
   } catch {
     return fallback

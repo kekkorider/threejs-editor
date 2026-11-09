@@ -65,6 +65,17 @@ When a feature lands, move it from **Not yet** into **Already in place**. Do not
 - The File system lists saved scenes. The open scene uses that path (`res://World.json` until Save Scene As), and the scene tab shows the same file. Ctrl+Alt+S saves to another `res://` path. Click a scene file to open it. An unsaved scene asks before it is replaced.
 - Drag a saved scene onto a node, or choose Scene → Instance Scene (Ctrl+Shift+A), to place it as a child. The instance stays linked to that scene. Make Local copies the nodes into the open scene. A scene cannot instance itself or a scene that instances it.
 
+### Import
+
+- The Scene dock has Scene and Import tabs. Double-click a model, texture, or audio file to open Import. Select another file to load its settings. Unsaved edits are dropped when the selection changes.
+- Drop a file from the operating system onto the File system. The editor copies it and imports it. The step is one history entry.
+- The sidecar is `source.ext.import`, in Godot's ConfigFile shape (`[remap]`, `[deps]`, `[params]`). The File system hides that file and everything under `.godot`.
+- Import As lists the importer for that extension and Keep File (exported as is). Preset has Default, Set as Default for the importer, Load Default, and Clear Default. Defaults are stored in `res://settings.json` under `importDefaults`. Reimport writes the sidecar and processes the file. The button reads Reimport (*) while the form is dirty. Several files of the same importer show a checkbox on each property. Only the checked properties are written. Mixed types stay read-only.
+- Textures are png, jpg, jpeg, webp, hdr, and exr. Compress Mode is Lossless (PNG) or Lossy (WebP, quality 0.7). Fix Alpha Border, Premult Alpha, Normal Map Invert Y, and Size Limit change the pixels. HDR as sRGB and HDR Clamp Exposure apply to hdr and exr. The imported file is `res://.godot/imported/`. VRAM Compressed, VRAM Uncompressed, and Basis Universal open as Lossless. The dock shows that note.
+- Models are gltf, glb, and obj. Drag one onto the scene tree to instance it. The instance name is the file name. Children are rebuilt from the file on load and on reimport, and they are not saved in the scene. Root Type stays Node. Apply Root Scale (on) bakes Root Scale (1) into the meshes. Apply Root Scale off sets the instance scale. Use Name Suffixes skips a node whose name ends in `-noimp` and makes a mesh whose name ends in `-alpha` transparent. Ensure Tangents builds tangents when the mesh has uv, normals, and an index. glTF Embedded Texture Handling is Discard All Textures or Embed as Uncompressed (the default). Materials become MeshStandardNodeMaterial. The meshes cast and receive shadows.
+- WAV can force 8-bit, mono, and a max rate (44100 Hz). Trim cuts silence at -50 dB. Normalize sets the peak to 0 dB. Loop Mode is Detect From WAV, Disabled, Forward, Ping-Pong, or Backward. Loop Begin and Loop End are sample positions. Detect From WAV reads a `smpl` chunk. MP3 and Ogg Vorbis keep Loop, Loop Offset, BPM, and Beat Count. Play in the Import dock plays the last import with the loop settings on the form.
+- Undo restores the sidecar and, for a model, the instance. It also restores a file that was dropped in.
+
 ### Project files
 
 - The first time the editor runs, it creates `threejs-editor/` at the project root. `res://` is that folder. The dev server reads and writes it.
@@ -140,8 +151,9 @@ Build these in an order that keeps the editor usable. A half-wired Godot feature
 
 ### Resources and import
 
-- Import settings for models, textures, and audio.
 - Make Unique already exists for geometry and materials. Extend that pattern to every shared resource.
+- Import does not generate mipmaps. Materials have no texture slot, so a texture is not assigned to a material from the dock.
+- These import controls stay out because this editor cannot run them: roughness filter, Detect 3D, VRAM compression, Basis Universal, high quality, HDR compression, RGTC, and channel pack. SVG, BMP, TGA, DDS, and KTX stay out. FBX, DAE, and Blend stay out. Animation import, LODs, shadow meshes, light baking, skins, and import scripts stay out. The Advanced Import Settings dialog stays out. Extract materials stays out. Skip File stays out. QOA and IMA-ADPCM stay out. Bar Beats stays out. Audio listener and player nodes stay under Nodes still missing. The Import dock Play button is the audio preview.
 
 ### Inspector
 

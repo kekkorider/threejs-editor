@@ -12,6 +12,8 @@ export interface FileSnap {
   text: string | null
   /** Empty directory. `text` stays null. */
   directory?: boolean
+  /** `text` is base64 file bytes. */
+  binary?: boolean
 }
 
 export interface HistoryEntry {
