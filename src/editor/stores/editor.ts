@@ -48,6 +48,7 @@ import {
 import {
   ShaderGraphClient,
   graphHasNodes,
+  patchGraphMaterialSettings,
   shaderEditorUrl,
   type ShaderCodePayload,
   type ShaderUniformEntry,
@@ -255,11 +256,14 @@ export const useEditorStore = defineStore('editor', () => {
   const shaderOpen = ref(false)
   const shaderMaterialId = ref<string | null>(null)
   const shaderStatus = ref('')
+  const shaderPlacement = ref<'panel' | 'window'>('panel')
   let shaderFollowId: string | null = null
   let shaderClient: ShaderGraphClient | null = null
   let shaderClientHost: Window | null = null
   let shaderClientFrame: HTMLIFrameElement | null = null
   let shaderFallbackFrame: HTMLIFrameElement | null = null
+  let shaderPopup: Window | null = null
+  let shaderPopupTimer = 0
   let shaderToken = 0
   let shaderAccepting = false
   let shaderLastGraph = ''
@@ -1748,6 +1752,7 @@ export const useEditorStore = defineStore('editor', () => {
     record(`${part} ${materialLabel(id)}`, () => {
       engine.setMaterialFlags(id, patch)
     }, { merge: false })
+    publishShaderMaterial(id)
   }
 
   function setMaterialName(id: string, name: string): void {
@@ -1824,7 +1829,7 @@ export const useEditorStore = defineStore('editor', () => {
     if (!shaderOpen.value || !materialId) return
     const mine = ++shaderToken
     shaderAccepting = false
-    shaderStatus.value = 'Opening the shader editor.'
+    shaderStatus.value = 'Opening the node editor.'
     if (!shaderClient || shaderClientHost !== host || shaderClientFrame !== iframe) {
       shaderClient?.destroy()
       shaderClientHost = host
@@ -1855,10 +1860,20 @@ export const useEditorStore = defineStore('editor', () => {
     }
     if (mine !== shaderToken) return
     try {
-      const graph = shaderGraph(materialId)
+      const resource = engine.materials.get(materialId)
+      const flags = {
+        side: resource?.side ?? 'front' as const,
+        transparent: resource?.transparent ?? false,
+      }
+      let graph = shaderGraph(materialId)
+      if (!graph) {
+        await shaderClient.setRootMaterial('material/standard')
+        if (mine !== shaderToken) return
+        graph = (await shaderClient.getGraph()).graphData
+      }
+      if (graph) graph = patchGraphMaterialSettings(graph, flags)
       shaderLastGraph = JSON.stringify(graph ?? null)
       if (graph) await shaderClient.load(graph)
-      else await shaderClient.setRootMaterial('material/standard')
     } catch (error) {
       if (mine !== shaderToken) return
       const message = error instanceof Error ? error.message : String(error)
@@ -1907,6 +1922,8 @@ export const useEditorStore = defineStore('editor', () => {
     shaderClientHost = null
     shaderClientFrame = null
     shaderFallbackFrame = null
+    releaseShaderPopup()
+    shaderPlacement.value = 'panel'
     shaderOpen.value = false
     shaderMaterialId.value = null
     shaderStatus.value = ''
@@ -1914,15 +1931,77 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   function attachShaderFrame(iframe: HTMLIFrameElement): void {
+    if (shaderPlacement.value === 'window') return
     shaderFallbackFrame = iframe
     void beginShaderSession(iframe, window)
+  }
+
+  function openShaderWindow(): void {
+    const materialId = shaderMaterialId.value
+    if (!shaderOpen.value || !materialId) return
+    if (shaderPopup && !shaderPopup.closed) {
+      shaderPopup.focus()
+      return
+    }
+    const hostUrl = new URL('/shader-host.html', window.location.origin)
+    hostUrl.searchParams.set('title', `Node Editor - ${shaderTitle(materialId)}`)
+    const popup = window.open(hostUrl.toString(), 'tsl-node-editor', 'popup,width=1200,height=800')
+    if (!popup) {
+      shaderStatus.value = 'The browser blocked the node editor window.'
+      engine.log('The browser blocked the node editor window.', 'warn')
+      return
+    }
+    shaderPlacement.value = 'window'
+    shaderPopup = popup
+    let started = false
+    const start = (): void => {
+      if (started || popup.closed || shaderPopup !== popup) return
+      const frame = popup.document.getElementById('frame')
+      if (!(frame instanceof HTMLIFrameElement)) return
+      started = true
+      shaderFallbackFrame = frame
+      popup.document.title = `Node Editor - ${shaderTitle(materialId)}`
+      void beginShaderSession(frame, popup)
+    }
+    popup.addEventListener('load', start)
+    if (popup.document.readyState === 'complete') start()
+    window.clearInterval(shaderPopupTimer)
+    shaderPopupTimer = window.setInterval(() => {
+      if (!shaderPopup || !shaderPopup.closed) return
+      window.clearInterval(shaderPopupTimer)
+      shaderPopup = null
+      if (shaderPlacement.value === 'window') shaderPlacement.value = 'panel'
+    }, 400)
+  }
+
+  function dockShaderEditor(): void {
+    releaseShaderPopup()
+    shaderPlacement.value = 'panel'
+  }
+
+  function releaseShaderPopup(): void {
+    window.clearInterval(shaderPopupTimer)
+    const popup = shaderPopup
+    shaderPopup = null
+    if (popup && !popup.closed) popup.close()
+  }
+
+  function publishShaderMaterial(id: string): void {
+    if (!shaderAccepting || shaderMaterialId.value !== id || !shaderClient) return
+    const graph = shaderGraph(id)
+    if (!graph) return
+    shaderLastGraph = JSON.stringify(graph)
+    void shaderClient.load(graph).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error)
+      shaderStatus.value = message
+    })
   }
 
   function openShaderEditor(materialId: string): void {
     if (!engine.materials.has(materialId)) return
     shaderFollowId = engine.selectedId
     shaderMaterialId.value = materialId
-    shaderStatus.value = 'Opening the shader editor.'
+    shaderStatus.value = 'Opening the node editor.'
     shaderOpen.value = true
     bottomCollapsed.value = false
     bottomTab.value = 'shader'
@@ -1988,8 +2067,18 @@ export const useEditorStore = defineStore('editor', () => {
     const graph = shaderGraph(shaderMaterialId.value)
     if (JSON.stringify(graph ?? null) === shaderLastGraph) return
     const frameNode = shaderFrameElement()
-    if (!frameNode) return
-    void beginShaderSession(frameNode, window)
+    const host = shaderClientHost
+    if (!frameNode || !host || host.closed) return
+    void beginShaderSession(frameNode, host)
+  })
+
+  watch(shaderMaterialId, (id) => {
+    if (!id || shaderPlacement.value !== 'window' || !shaderOpen.value) return
+    const frameNode = shaderFrameElement()
+    const host = shaderClientHost
+    if (!frameNode || !host || host.closed) return
+    host.document.title = `Node Editor - ${shaderTitle(id)}`
+    void beginShaderSession(frameNode, host)
   })
 
   function compileBound(log: boolean): void {
@@ -3776,6 +3865,7 @@ export const useEditorStore = defineStore('editor', () => {
     shaderOpen,
     shaderMaterialId,
     shaderStatus,
+    shaderPlacement,
     inspectorMaterialId,
     logs,
     sceneFilter,
@@ -3972,6 +4062,8 @@ export const useEditorStore = defineStore('editor', () => {
     shaderDocId,
     shaderGraph,
     openShaderEditor,
+    openShaderWindow,
+    dockShaderEditor,
     openShaderForNode,
     openShaderForPath,
     closeShaderEditor,

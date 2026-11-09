@@ -49,7 +49,7 @@ When a feature lands, move it from **Not yet** into **Already in place**. Do not
 - Transform. New meshes start at position `[0, 0, 0]`, rotation `[0, 0, 0]`, scale `[1, 1, 1]`.
 - Geometry type and parameters, including shared geometry.
 - Mesh group on a mesh. The configuration row holds the geometry file. The Geometry row holds the primitive type and its parameters. With no geometry file, configuration shows Create Geometry. That button opens the Create Node dialog on Geometry. Drag a mesh file onto the slot to assign it. Click the slot for New, Make Unique, Clear, and the other files of that type.
-- Material group on a mesh. It holds one Edit material button. The button opens that material in the Inspector: Open Node Editor, then name, preset, cull, transparency, and wireframe. A single click on a material file does the same, and the TSL panel shows that material's code. Cast Shadow sits under Visibility.
+- Material group on a mesh. It holds one Edit material button. The button opens that material in the Inspector: Open Node Editor, then name, preset, cull, transparency, and wireframe. Cull and Transparent stay equal to the node editor's Side and Transparent. A single click on a material file does the same, and the TSL panel shows that material's code. Cast Shadow sits under Visibility.
 - Projection holds the camera frustum. Camera holds Current, Preview, Sync Viewport, and Layers. View Offset stays its own group.
 - Light holds color, energy, ground, and Look at. Omni holds Range. Spot holds Range, Angle, and Penumbra.
 - Light color, energy, range, spot angle, penumbra, and Look at for directional and spot lights.
@@ -78,7 +78,7 @@ When a feature lands, move it from **Not yet** into **Already in place**. Do not
 
 - Primitive meshes under `res://meshes`.
 - TSL materials under `res://materials`, with presets (Lit, Metal, UV, Checker, and the others in the create dialog).
-- Open Node Editor shows the node editor in the bottom panel, beside TSL and Output. Double-click a material file to open the same tab. Each edit applies to every mesh that uses that material. The node graph is stored in the material JSON file. The File system lists that file without `.json`. A single click on the file shows its code in the TSL panel and its settings in the Inspector.
+- Open Node Editor shows the node editor in the bottom panel, beside TSL and Output. The panel button Open in New Window moves that editor into its own window. Dock to Bottom Panel puts it back. Closing the window does the same. Double-click a material file to open the same tab. Each edit applies to every mesh that uses that material. The node graph is stored in the material JSON file. The File system lists that file without `.json`. A single click on the file shows its code in the TSL panel and its settings in the Inspector. Cull and Transparent in the Inspector are the material node's Side and Transparent. A change on either side updates the other. Wireframe stays on the Inspector.
 - The starter scene is one 1×1×1 cube at `[0, 0, 0]` with the Lit material.
 
 ### Lighting

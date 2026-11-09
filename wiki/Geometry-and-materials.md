@@ -61,6 +61,11 @@ The source is the TSL text.
 The bottom panel edits that text for the bound material.
 A single click on the material file shows this code.
 Open Node Editor shows the node editor in the bottom panel.
+Open in New Window moves that editor into its own window.
+Dock to Bottom Panel puts it back.
+Cull and Transparent match the material node's Side and Transparent.
+A change on either side updates the other.
+Wireframe stays on the Inspector.
 The node graph is stored in the same JSON file.
 
 ## Shared materials

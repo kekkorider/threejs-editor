@@ -126,6 +126,8 @@ import {
 import {
   applyGraphCode,
   graphHasNodes,
+  patchGraphMaterialSettings,
+  rewriteMaterialFlagCode,
   writeUniformValue,
   type ShaderCodePayload,
   type ShaderUniformEntry,
@@ -2044,7 +2046,16 @@ export class EditorState {
     if (patch.side) resource.side = patch.side
     if (patch.transparent !== undefined) resource.transparent = patch.transparent
     if (patch.wireframe !== undefined) resource.wireframe = patch.wireframe
-    if (resource.material) applyMaterialFlags(resource.material, this.flagsOf(resource))
+    const flags = this.flagsOf(resource)
+    if (resource.graph) resource.graph = patchGraphMaterialSettings(resource.graph, flags)
+    if (resource.code?.code) {
+      const code = rewriteMaterialFlagCode(resource.code.code, flags.side, flags.transparent)
+      if (code !== resource.code.code) resource.code = { ...resource.code, code }
+      this.compileMaterial(materialId)
+    } else if (resource.material) {
+      applyMaterialFlags(resource.material, flags)
+    }
+    this.persistMaterialFile(resource, true)
     this.touchScene()
   }
 
@@ -3705,7 +3716,7 @@ export class EditorState {
       next.name = resource.name
       applyMaterialFlags(next, this.flagsOf(resource))
       const uniforms = applyGraphCode(next, code)
-      this.adoptSurfaceFlags(resource, next)
+      this.syncSurfaceFromGraph(resource, next, code.code)
       next.userData.editorMaterial = true
       this.swapMaterial(resource, next)
       resource.uniformNodes = uniforms
@@ -3718,15 +3729,28 @@ export class EditorState {
     }
   }
 
-  private adoptSurfaceFlags(resource: MaterialResource, material: THREE.MeshStandardNodeMaterial): void {
-    resource.transparent = material.transparent
-    resource.wireframe = Boolean(material.wireframe)
-    resource.side = material.side === THREE.BackSide
-      ? 'back'
-      : material.side === THREE.DoubleSide
-        ? 'double'
-        : 'front'
-    if (resource.transparent) material.depthWrite = false
+  /**
+   * Side and Transparent in the node editor win when the graph assigns them.
+   * Wireframe stays the inspector value. Depth Write stays the graph value when the graph sets it.
+   */
+  private syncSurfaceFromGraph(resource: MaterialResource, material: THREE.MeshStandardNodeMaterial, code: string): void {
+    if (/material\.side\s*=/.test(code)) {
+      resource.side = material.side === THREE.BackSide
+        ? 'back'
+        : material.side === THREE.DoubleSide
+          ? 'double'
+          : 'front'
+    } else {
+      material.side = resource.side === 'back'
+        ? THREE.BackSide
+        : resource.side === 'double'
+          ? THREE.DoubleSide
+          : THREE.FrontSide
+    }
+    if (/material\.transparent\s*=/.test(code)) resource.transparent = material.transparent
+    else material.transparent = resource.transparent
+    if (!/material\.depthWrite\s*=/.test(code)) material.depthWrite = !resource.transparent
+    material.wireframe = resource.wireframe
     material.needsUpdate = true
   }
 

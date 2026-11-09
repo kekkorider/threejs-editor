@@ -1087,6 +1087,7 @@
   font-weight: 500;
   font-size: 12px;
 }
+.shader-bar .icon-btn { flex: none; }
 .shader-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .shader-frame {
   flex: 1;

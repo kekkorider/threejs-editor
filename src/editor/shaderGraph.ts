@@ -1,6 +1,7 @@
 import * as THREE from 'three/webgpu'
 import * as TSL from 'three/tsl'
 import type { ShaderCodeFile } from './projectFs'
+import type { MaterialSide } from './tsl'
 
 /** Standalone node editor. The host talks to it with postMessage. */
 export const SHADER_EDITOR_ORIGIN = 'https://www.tsl-graph.xyz'
@@ -88,6 +89,96 @@ export function graphHasNodes(value: unknown): boolean {
   if (!nested || typeof nested !== 'object' || Array.isArray(nested)) return false
   const nodes = (nested as { nodes?: unknown }).nodes
   return Array.isArray(nodes) && nodes.length > 0
+}
+
+const SURFACE_MATERIALS = new Set([
+  'material/standard',
+  'material/basic',
+  'material/physical',
+  'material/phong',
+])
+
+const DEFAULT_ACTIVE: Record<string, readonly string[]> = {
+  'material/standard': ['colorNode', 'positionNode'],
+  'material/basic': ['colorNode', 'positionNode'],
+  'material/physical': ['colorNode', 'positionNode'],
+  'material/phong': ['colorNode', 'positionNode'],
+}
+
+export function sideToMaterialValue(side: MaterialSide): number {
+  if (side === 'back') return 1
+  if (side === 'double') return 2
+  return 0
+}
+
+/**
+ * Write the inspector Cull and Transparent values onto every surface material node.
+ * Side and Transparent are that node's property inputs, so they stay visible and compile.
+ */
+export function patchGraphMaterialSettings(
+  graph: unknown,
+  flags: { side: MaterialSide, transparent: boolean },
+): unknown {
+  const copy = JSON.parse(JSON.stringify(graph)) as unknown
+  for (const node of materialNodes(copy)) {
+    const type = materialNodeType(node)
+    if (!SURFACE_MATERIALS.has(type)) continue
+    const data = nodeData(node)
+    const values = asRecord(data.values) ?? {}
+    values.side = sideToMaterialValue(flags.side)
+    values.transparent = flags.transparent
+    data.values = values
+    const active = Array.isArray(data.activeInputs)
+      ? data.activeInputs.filter((item): item is string => typeof item === 'string')
+      : [...(DEFAULT_ACTIVE[type] ?? [])]
+    for (const key of ['side', 'transparent']) {
+      if (!active.includes(key)) active.push(key)
+    }
+    data.activeInputs = active
+  }
+  return copy
+}
+
+/** Keep generated `material.side` and `material.transparent` lines equal to the inspector. */
+export function rewriteMaterialFlagCode(code: string, side: MaterialSide, transparent: boolean): string {
+  let next = upsertMaterialAssignment(code, 'side', String(sideToMaterialValue(side)))
+  next = upsertMaterialAssignment(next, 'transparent', transparent ? 'true' : 'false')
+  return next
+}
+
+function upsertMaterialAssignment(code: string, field: string, literal: string): string {
+  const pattern = new RegExp(`material\\.${field}\\s*=\\s*[^;\\n]+;`)
+  const line = `material.${field} = ${literal};`
+  if (pattern.test(code)) return code.replace(pattern, line)
+  const end = code.lastIndexOf('\n}')
+  if (end < 0) return `${code}\n${line}\n`
+  return `${code.slice(0, end)}\n\t${line}${code.slice(end)}`
+}
+
+function materialNodes(graph: unknown): Record<string, unknown>[] {
+  const record = asRecord(graph)
+  if (!record) return []
+  if (Array.isArray(record.nodes)) return record.nodes.filter(isNodeRecord)
+  const nested = asRecord(record.graph)
+  if (nested && Array.isArray(nested.nodes)) return nested.nodes.filter(isNodeRecord)
+  return []
+}
+
+function isNodeRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function materialNodeType(node: Record<string, unknown>): string {
+  if (typeof node.type === 'string' && node.type.startsWith('material/')) return node.type
+  const data = asRecord(node.data)
+  if (data && typeof data.type === 'string' && data.type.startsWith('material/')) return data.type
+  return ''
+}
+
+function nodeData(node: Record<string, unknown>): Record<string, unknown> {
+  const data = asRecord(node.data) ?? {}
+  node.data = data
+  return data
 }
 
 export function shaderEditorUrl(docId: string): string {
