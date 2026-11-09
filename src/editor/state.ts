@@ -50,6 +50,7 @@ import {
   readCached,
   readMaterialFile,
   readMeshFile,
+  type ShaderCodeFile,
   removePath,
   retarget,
   uniqueFilePath,
@@ -122,6 +123,16 @@ import {
   type SceneMaterialRecord,
   type SceneNodeRecord,
 } from './sceneFile'
+import {
+  applyGraphCode,
+  graphHasNodes,
+  patchGraphMaterialSettings,
+  rewriteMaterialFlagCode,
+  writeUniformValue,
+  type ShaderCodePayload,
+  type ShaderUniformEntry,
+  type ShaderUniformRef,
+} from './shaderGraph'
 import {
   DEFAULT_FLAGS,
   applyMaterialFlags,
@@ -248,6 +259,12 @@ export interface MaterialResource {
   transparent: boolean
   wireframe: boolean
   path: string
+  /** Node graph. Null when the material is text only. */
+  graph: unknown | null
+  /** Compiled node graph. Null when `graph` is null. */
+  code: ShaderCodeFile | null
+  /** Uniform nodes from the last compiled graph. Not saved. */
+  uniformNodes: Record<string, ShaderUniformRef> | null
   material: THREE.MeshStandardNodeMaterial | null
   error: string | null
   defaults: { name: string, source: string, side: MaterialSide, transparent: boolean, wireframe: boolean }
@@ -1866,6 +1883,9 @@ export class EditorState {
     resource.side = file.side
     resource.transparent = file.transparent
     resource.wireframe = file.wireframe
+    resource.graph = file.graph ?? null
+    resource.code = file.code ?? null
+    resource.uniformNodes = null
     const compiled = this.compileMaterial(resource.id)
     if (!compiled.ok) this.log(`${file.name}: ${compiled.error}`, 'error')
   }
@@ -1935,24 +1955,83 @@ export class EditorState {
   setMaterialSource(materialId: string, source: string): void {
     const resource = this.materials.get(materialId)
     if (!resource) return
+    const hadGraph = resource.graph !== null || resource.code !== null
     resource.source = source
+    this.clearShaderGraph(resource)
     this.touchScene()
+    if (hadGraph) this.persistMaterialFile(resource, true)
+  }
+
+  /** Load a material file into memory. Returns the material id. */
+  ensureMaterial(path: string): string | null {
+    return this.materialRuntimeForPath(path)
+  }
+
+  /**
+   * Store a node graph and apply it to every mesh that uses the material.
+   * An empty graph returns the material to its text source.
+   */
+  applyShaderDocument(
+    materialId: string,
+    graph: unknown,
+    payload: ShaderCodePayload,
+  ): { changed: boolean, ok: true } | { changed: boolean, ok: false, error: string } {
+    const resource = this.materials.get(materialId)
+    if (!resource) return { changed: false, ok: false, error: 'Missing material.' }
+    const hasNodes = graphHasNodes(graph)
+    const nextGraph = hasNodes ? graph : null
+    const nextCode = hasNodes && payload.code && !payload.error
+      ? { code: payload.code, imports: payload.imports }
+      : null
+    const failed = hasNodes && !nextCode
+    const sameGraph = JSON.stringify(resource.graph ?? null) === JSON.stringify(nextGraph ?? null)
+    const sameCode = (resource.code?.code ?? '') === (nextCode?.code ?? '')
+    if (sameGraph && sameCode && !failed) return { changed: false, ok: true }
+    if (!failed && sameCode && nextCode && resource.material) {
+      resource.graph = nextGraph
+      resource.code = nextCode
+      this.touchScene()
+      this.persistMaterialFile(resource, true)
+      return { changed: true, ok: true }
+    }
+    resource.graph = nextGraph
+    resource.code = nextCode
+    resource.uniformNodes = null
+    this.touchScene()
+    if (failed) {
+      resource.error = payload.error || 'The graph has no code.'
+      this.persistMaterialFile(resource, true)
+      return { changed: true, ok: false, error: resource.error }
+    }
+    const compiled = this.compileMaterial(materialId)
+    this.persistMaterialFile(resource, true)
+    if (!compiled.ok) return { changed: true, ok: false, error: compiled.error }
+    return { changed: true, ok: true }
+  }
+
+  /** Write uniform values into the live material. The mesh updates immediately. */
+  patchShaderUniforms(materialId: string, uniforms: readonly ShaderUniformEntry[]): void {
+    const resource = this.materials.get(materialId)
+    const map = resource?.uniformNodes
+    if (!resource || !map) return
+    for (const entry of uniforms) {
+      const node = map[entry.id] ?? map[entry.name]
+      if (!node) continue
+      writeUniformValue(node, entry.uniformType, entry.value)
+    }
+    if (resource.material) resource.material.needsUpdate = true
   }
 
   compileMaterial(materialId: string): { ok: true } | { ok: false, error: string } {
     const resource = this.materials.get(materialId)
     if (!resource) return { ok: false, error: 'Missing material.' }
+    if (resource.code?.code) return this.compileShaderGraph(resource)
     try {
       const next = compileTSLMaterial(resource.source, this.flagsOf(resource))
       next.name = resource.name
-      const previous = resource.material
-      resource.material = next
+      this.swapMaterial(resource, next)
+      resource.uniformNodes = null
       resource.error = null
-      for (const node of this.usersOfMaterial(materialId)) {
-        const mesh = node.object
-        if (mesh instanceof THREE.Mesh) mesh.material = next
-      }
-      if (previous && previous !== next) previous.dispose()
       return { ok: true }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -1967,7 +2046,16 @@ export class EditorState {
     if (patch.side) resource.side = patch.side
     if (patch.transparent !== undefined) resource.transparent = patch.transparent
     if (patch.wireframe !== undefined) resource.wireframe = patch.wireframe
-    if (resource.material) applyMaterialFlags(resource.material, this.flagsOf(resource))
+    const flags = this.flagsOf(resource)
+    if (resource.graph) resource.graph = patchGraphMaterialSettings(resource.graph, flags)
+    if (resource.code?.code) {
+      const code = rewriteMaterialFlagCode(resource.code.code, flags.side, flags.transparent)
+      if (code !== resource.code.code) resource.code = { ...resource.code, code }
+      this.compileMaterial(materialId)
+    } else if (resource.material) {
+      applyMaterialFlags(resource.material, flags)
+    }
+    this.persistMaterialFile(resource, true)
     this.touchScene()
   }
 
@@ -1992,8 +2080,10 @@ export class EditorState {
     const resource = this.materials.get(materialId)
     if (!resource) return
     resource.source = resource.defaults.source
+    this.clearShaderGraph(resource)
     const compiled = this.compileMaterial(materialId)
     if (!compiled.ok) this.log(`${resource.name}: ${compiled.error}`, 'error')
+    this.persistMaterialFile(resource, true)
     this.touchScene()
   }
 
@@ -2013,6 +2103,21 @@ export class EditorState {
     node.imported = false
     ;(node.object as THREE.Mesh).material = resource.material
     this.touchScene()
+  }
+
+  addMaterialFile(name: string, source: string, flags: MaterialFlags): MaterialResource {
+    const resource = this.createMaterialResource(name.trim() || 'Material', source, flags)
+    const compiled = this.compileMaterial(resource.id)
+    if (!compiled.ok) {
+      this.materials.delete(resource.id)
+      throw new Error(compiled.error)
+    }
+    this.persistMaterialFile(resource)
+    return resource
+  }
+
+  addGeometryFile(name: string, type: GeometryType, params: Record<string, number>): GeometryResource {
+    return this.createGeometryResource(type, params, name.trim() || undefined, { persist: true })
   }
 
   newMaterialFor(nodeId: string, presetId = 'lit'): MaterialResource | null {
@@ -2035,7 +2140,11 @@ export class EditorState {
     const node = this.nodes.get(nodeId)
     const current = node?.materialId ? this.materials.get(node.materialId) : undefined
     if (!node || !current) return
-    const copy = this.createMaterialResource(`${current.name}Unique`, current.source, this.flagsOf(current), { persist: true })
+    const copy = this.createMaterialResource(`${current.name}Unique`, current.source, this.flagsOf(current), {
+      persist: true,
+      graph: current.graph,
+      code: current.code,
+    })
     const compiled = this.compileMaterial(copy.id)
     if (!compiled.ok) {
       this.materials.delete(copy.id)
@@ -2050,8 +2159,10 @@ export class EditorState {
     if (!resource) return
     const preset = presetById(presetId)
     resource.source = preset.source
+    this.clearShaderGraph(resource)
     const compiled = this.compileMaterial(materialId)
     if (!compiled.ok) this.log(`${resource.name}: ${compiled.error}`, 'error')
+    this.persistMaterialFile(resource, true)
     this.touchScene()
   }
 
@@ -2557,6 +2668,8 @@ export class EditorState {
           transparent: resource.transparent,
           wireframe: resource.wireframe,
           path: resource.path,
+          ...(resource.graph ? { graph: resource.graph } : {}),
+          ...(resource.code ? { code: resource.code } : {}),
         })
         return id
       }
@@ -2687,9 +2800,10 @@ export class EditorState {
           side: record.side,
           transparent: record.transparent,
           wireframe: record.wireframe,
-        }, { path: record.path })
+        }, { path: record.path, graph: record.graph ?? null, code: record.code ?? null })
         const compiled = this.compileMaterial(resource.id)
         if (!compiled.ok) this.log(`${record.name}: ${compiled.error}`, 'error')
+        if (preserveNames) this.persistMaterialFile(resource, true)
         matMap.set(record.id, resource.id)
       }
 
@@ -2884,7 +2998,7 @@ export class EditorState {
         side: record.side,
         transparent: record.transparent,
         wireframe: record.wireframe,
-      }, { path: record.path })
+      }, { path: record.path, graph: record.graph ?? null, code: record.code ?? null })
       const compiled = this.compileMaterial(resource.id)
       if (!compiled.ok) this.log(`${record.name}: ${compiled.error}`, 'error')
       matMap.set(record.id, resource.id)
@@ -3554,7 +3668,7 @@ export class EditorState {
       side: file.side,
       transparent: file.transparent,
       wireframe: file.wireframe,
-    }, { path })
+    }, { path, graph: file.graph ?? null, code: file.code ?? null })
     const compiled = this.compileMaterial(resource.id)
     if (!compiled.ok) this.log(`${file.name}: ${compiled.error}`, 'error')
     return resource.id
@@ -3575,7 +3689,7 @@ export class EditorState {
     })
   }
 
-  private persistMaterialFile(resource: MaterialResource): void {
+  private persistMaterialFile(resource: MaterialResource, quiet = false): void {
     writeMaterialFile(resource.path, {
       version: 1,
       name: resource.name,
@@ -3583,7 +3697,71 @@ export class EditorState {
       side: resource.side,
       transparent: resource.transparent,
       wireframe: resource.wireframe,
-    })
+      ...(resource.graph ? { graph: resource.graph } : {}),
+      ...(resource.code ? { code: resource.code } : {}),
+    }, quiet)
+  }
+
+  private clearShaderGraph(resource: MaterialResource): void {
+    resource.graph = null
+    resource.code = null
+    resource.uniformNodes = null
+  }
+
+  private compileShaderGraph(resource: MaterialResource): { ok: true } | { ok: false, error: string } {
+    const code = resource.code
+    if (!code?.code) return { ok: false, error: 'The graph has no code.' }
+    try {
+      const next = new THREE.MeshStandardNodeMaterial()
+      next.name = resource.name
+      applyMaterialFlags(next, this.flagsOf(resource))
+      const uniforms = applyGraphCode(next, code)
+      this.syncSurfaceFromGraph(resource, next, code.code)
+      next.userData.editorMaterial = true
+      this.swapMaterial(resource, next)
+      resource.uniformNodes = uniforms
+      resource.error = null
+      return { ok: true }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      resource.error = message
+      return { ok: false, error: message }
+    }
+  }
+
+  /**
+   * Side and Transparent in the node editor win when the graph assigns them.
+   * Wireframe stays the inspector value. Depth Write stays the graph value when the graph sets it.
+   */
+  private syncSurfaceFromGraph(resource: MaterialResource, material: THREE.MeshStandardNodeMaterial, code: string): void {
+    if (/material\.side\s*=/.test(code)) {
+      resource.side = material.side === THREE.BackSide
+        ? 'back'
+        : material.side === THREE.DoubleSide
+          ? 'double'
+          : 'front'
+    } else {
+      material.side = resource.side === 'back'
+        ? THREE.BackSide
+        : resource.side === 'double'
+          ? THREE.DoubleSide
+          : THREE.FrontSide
+    }
+    if (/material\.transparent\s*=/.test(code)) resource.transparent = material.transparent
+    else material.transparent = resource.transparent
+    if (!/material\.depthWrite\s*=/.test(code)) material.depthWrite = !resource.transparent
+    material.wireframe = resource.wireframe
+    material.needsUpdate = true
+  }
+
+  private swapMaterial(resource: MaterialResource, next: THREE.MeshStandardNodeMaterial): void {
+    const previous = resource.material
+    resource.material = next
+    for (const node of this.usersOfMaterial(resource.id)) {
+      const mesh = node.object
+      if (mesh instanceof THREE.Mesh) mesh.material = next
+    }
+    if (previous && previous !== next) previous.dispose()
   }
 
   private spawnPoint(lift: number): THREE.Vector3 {
@@ -3624,7 +3802,7 @@ export class EditorState {
     name: string,
     source: string,
     flags: MaterialFlags,
-    options?: { path?: string, persist?: boolean },
+    options?: { path?: string, persist?: boolean, graph?: unknown | null, code?: ShaderCodeFile | null },
   ): MaterialResource {
     const unique = this.uniqueResourceName(name, this.materials)
     const resource: MaterialResource = {
@@ -3635,6 +3813,9 @@ export class EditorState {
       transparent: flags.transparent,
       wireframe: flags.wireframe,
       path: options?.path ?? uniqueFilePath('res://materials', fileStem(unique), '.json'),
+      graph: options?.graph ?? null,
+      code: options?.code ?? null,
+      uniformNodes: null,
       material: null,
       error: null,
       defaults: {

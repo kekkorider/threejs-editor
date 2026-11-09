@@ -7,18 +7,22 @@ import { GEOMETRY_CATALOG, defaultParams, geometryEntry, type GeometryType, type
 import { kindClass, kindIcon } from '../lib/format'
 import { NODE_TYPES, type NodeKind } from '../state'
 import { useEditorStore } from '../stores/editor'
-import { TSL_PRESETS, presetById } from '../tsl'
+import { DEFAULT_FLAGS, TSL_PRESETS, presetById, type MaterialSide } from '../tsl'
 
 const store = useEditorStore()
 const initial = presetById(store.createPreset || 'lit')
+type PickId = NodeKind | 'Material' | 'Geometry'
 const draft = reactive({
-  kind: store.createKind,
+  pick: (store.createResource === 'material' ? 'Material' : store.createResource === 'geometry' ? 'Geometry' : store.createKind) as PickId,
   query: '',
   name: '',
   geometryType: 'box' as GeometryType,
   params: defaultParams('box'),
   presetId: initial.id,
   source: initial.source,
+  side: DEFAULT_FLAGS.side as MaterialSide,
+  transparent: DEFAULT_FLAGS.transparent,
+  wireframe: DEFAULT_FLAGS.wireframe,
   color: '#fff4e4',
   ground: '#3c342c',
   intensity: 2.4,
@@ -36,21 +40,41 @@ const draft = reactive({
   bottom: defaultCameraSettings().bottom,
 })
 const error = ref('')
-const groups = ['Node', 'Mesh', 'Camera', 'Light', 'Physics']
+const groups = ['Node', 'Mesh', 'Camera', 'Light', 'Physics', 'Resource']
+const resources = [
+  {
+    id: 'Material' as const,
+    label: 'Material',
+    group: 'Resource',
+    description: 'A TSL material file. Set the name, the preset, the source, and the surface flags. The file is not added to the scene.',
+    inherits: 'Material',
+  },
+  {
+    id: 'Geometry' as const,
+    label: 'Geometry',
+    group: 'Resource',
+    description: 'A mesh primitive file. Set the name, the type, and every size. The file is not added to the scene.',
+    inherits: 'Geometry',
+  },
+]
 
-const entry = computed(() => NODE_TYPES.find((item) => item.kind === draft.kind) ?? NODE_TYPES[0]!)
+const entry = computed(() => {
+  const resource = resources.find((item) => item.id === draft.pick)
+  if (resource) return resource
+  return NODE_TYPES.find((item) => item.kind === draft.pick) ?? NODE_TYPES[0]!
+})
 const specs = computed(() => geometryEntry(draft.geometryType).params)
+const isResource = computed(() => draft.pick === 'Material' || draft.pick === 'Geometry')
 
-function entriesFor(group: string): typeof NODE_TYPES {
+function entriesFor(group: string): Array<{ id: PickId, label: string }> {
   const query = draft.query.trim().toLowerCase()
-  return NODE_TYPES.filter((item) => {
-    if (item.group !== group) return false
-    return !query || item.label.toLowerCase().includes(query)
-  })
+  const nodes = NODE_TYPES.filter((item) => item.group === group).map((item) => ({ id: item.kind as PickId, label: item.label }))
+  const extra = resources.filter((item) => item.group === group).map((item) => ({ id: item.id as PickId, label: item.label }))
+  return [...nodes, ...extra].filter((item) => !query || item.label.toLowerCase().includes(query))
 }
 
-function choose(kind: NodeKind): void {
-  draft.kind = kind
+function choose(id: PickId): void {
+  draft.pick = id
 }
 
 function onGeometry(event: Event): void {
@@ -69,9 +93,15 @@ function setParam(spec: ParamSpec, event: Event): void {
 }
 
 function submit(): void {
+  const resource = draft.pick === 'Material' ? 'material' : draft.pick === 'Geometry' ? 'geometry' : 'node'
   const message = store.createFromDraft({
-    kind: draft.kind,
+    kind: resource === 'node' ? draft.pick as NodeKind : 'Node3D',
+    resource,
     name: draft.name,
+    side: draft.side,
+    transparent: draft.transparent,
+    wireframe: draft.wireframe,
+    assignNodeId: store.createAssignNodeId,
     geometryType: draft.geometryType,
     params: { ...draft.params },
     source: draft.source,
@@ -129,15 +159,15 @@ function onBackdrop(event: PointerEvent): void {
                 <div class="group-label">{{ group }}</div>
                 <div
                   v-for="item in entriesFor(group)"
-                  :key="item.kind"
+                  :key="item.id"
                   class="tree-row"
-                  :class="{ selected: item.kind === draft.kind }"
+                  :class="{ selected: item.id === draft.pick }"
                   style="padding-left: 12px"
-                  @click="choose(item.kind)"
+                  @click="choose(item.id)"
                   @dblclick="submit"
                 >
-                  <span class="kind-icon" :class="kindClass(item.kind)">
-                    <Icon :name="kindIcon(item.kind)" />
+                  <span class="kind-icon" :class="item.id === 'Material' ? 'mat' : item.id === 'Geometry' ? 'mesh' : kindClass(item.id)">
+                    <Icon :name="item.id === 'Material' ? 'material' : item.id === 'Geometry' ? 'mesh' : kindIcon(item.id)" />
                   </span>
                   <span class="label">{{ item.label }}</span>
                 </div>
@@ -149,7 +179,33 @@ function onBackdrop(event: PointerEvent): void {
           <h2>{{ entry.label }}</h2>
           <div class="inherits" style="padding: 0">{{ entry.inherits }}</div>
           <p class="desc">{{ entry.description }}</p>
-          <template v-if="draft.kind === 'MeshInstance3D'">
+          <template v-if="draft.pick === 'Material'">
+            <div class="prop">
+              <div class="prop-label">TSL Preset</div>
+              <select :value="draft.presetId" @change="onPreset">
+                <option v-for="item in TSL_PRESETS" :key="item.id" :value="item.id">{{ item.name }}</option>
+              </select>
+            </div>
+            <CodeEditor v-model="draft.source" />
+            <div class="prop">
+              <div class="prop-label">Cull</div>
+              <select v-model="draft.side">
+                <option value="front">Front</option>
+                <option value="back">Back</option>
+                <option value="double">Double</option>
+              </select>
+            </div>
+            <div class="prop">
+              <div class="prop-label">Transparent</div>
+              <input v-model="draft.transparent" type="checkbox" />
+            </div>
+            <div class="prop">
+              <div class="prop-label">Wireframe</div>
+              <input v-model="draft.wireframe" type="checkbox" />
+            </div>
+            <div class="hint">{{ error }}</div>
+          </template>
+          <template v-else-if="draft.pick === 'Geometry' || draft.pick === 'MeshInstance3D'">
             <div class="prop">
               <div class="prop-label">Geometry</div>
               <select :value="draft.geometryType" @change="onGeometry">
@@ -167,16 +223,18 @@ function onBackdrop(event: PointerEvent): void {
                 @change="setParam(spec, $event)"
               />
             </div>
-            <div class="prop">
-              <div class="prop-label">TSL Preset</div>
-              <select :value="draft.presetId" @change="onPreset">
-                <option v-for="item in TSL_PRESETS" :key="item.id" :value="item.id">{{ item.name }}</option>
-              </select>
-            </div>
-            <CodeEditor v-model="draft.source" />
+            <template v-if="draft.pick === 'MeshInstance3D'">
+              <div class="prop">
+                <div class="prop-label">TSL Preset</div>
+                <select :value="draft.presetId" @change="onPreset">
+                  <option v-for="item in TSL_PRESETS" :key="item.id" :value="item.id">{{ item.name }}</option>
+                </select>
+              </div>
+              <CodeEditor v-model="draft.source" />
+            </template>
             <div class="hint">{{ error }}</div>
           </template>
-          <template v-else-if="draft.kind === 'Camera3D'">
+          <template v-else-if="draft.pick === 'Camera3D'">
             <div class="prop">
               <div class="prop-label">Projection</div>
               <select v-model="draft.projection">
@@ -220,7 +278,7 @@ function onBackdrop(event: PointerEvent): void {
             </div>
             <div class="hint">The inspector edits the rest of the lens after the camera is created.</div>
           </template>
-          <template v-else-if="draft.kind !== 'Node3D' && draft.kind !== 'Body'">
+          <template v-else-if="draft.pick !== 'Node3D' && draft.pick !== 'Body' && !isResource">
             <div class="prop">
               <div class="prop-label">Color</div>
               <input v-model="draft.color" type="color" />
@@ -229,15 +287,15 @@ function onBackdrop(event: PointerEvent): void {
               <div class="prop-label">Energy</div>
               <input v-model.number="draft.intensity" type="number" min="0" max="50" step="0.1" />
             </div>
-            <div v-if="draft.kind === 'HemisphereLight3D'" class="prop">
+            <div v-if="draft.pick === 'HemisphereLight3D'" class="prop">
               <div class="prop-label">Ground</div>
               <input v-model="draft.ground" type="color" />
             </div>
-            <div v-if="draft.kind === 'OmniLight3D' || draft.kind === 'SpotLight3D'" class="prop">
+            <div v-if="draft.pick === 'OmniLight3D' || draft.pick === 'SpotLight3D'" class="prop">
               <div class="prop-label">Range</div>
               <input v-model.number="draft.range" type="number" min="0" max="200" step="0.1" />
             </div>
-            <template v-if="draft.kind === 'SpotLight3D'">
+            <template v-if="draft.pick === 'SpotLight3D'">
               <div class="prop">
                 <div class="prop-label">Angle</div>
                 <input v-model.number="draft.angle" type="number" min="1" max="90" step="1" />

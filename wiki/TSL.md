@@ -54,6 +54,18 @@ The TSL editor highlights keywords, numbers, and known calls.
 `highlightTSL` does that work.
 The TSL editor stays off until a mesh material is bound.
 
+## Node editor
+
+Open Node Editor shows the node editor in the bottom panel.
+The tab sits with TSL, Output, History, and Physics.
+Double-click a material file in the File system to open the same tab.
+The tab loads `https://www.tsl-graph.xyz/editor/standalone`.
+Each edit applies to every mesh that uses that material.
+The node graph is stored in the material JSON file.
+The File system lists the file without `.json`.
+A compile error stays on the material and in Output.
+The last good surface stays on the mesh until the graph compiles.
+
 ## Presets
 
 | Name | Id | What it does |

@@ -32,6 +32,12 @@ function scrubParam(spec: ParamSpec, delta: number): void {
   writeParam(spec, next)
 }
 
+function openExisting(event: MouseEvent): void {
+  const id = node.value?.id
+  if (!id) return
+  store.openExistingGeometryMenu(id, event.currentTarget as HTMLElement)
+}
+
 function openMenu(event: MouseEvent): void {
   const id = node.value?.id
   if (!id) return
@@ -41,9 +47,14 @@ function openMenu(event: MouseEvent): void {
 
 <template>
   <Section v-if="node?.hasGeometry" title="Mesh" section-key="mesh" tone="sub mesh">
-    <PropRow label="Mesh">
+    <PropRow label="Configuration">
+      <div v-if="!geometry" class="row-actions">
+        <button type="button" class="btn" @click="openExisting">Add existing</button>
+        <button type="button" class="btn" @click="store.openCreateResource('geometry', node.id)">Create new</button>
+      </div>
       <ResourceSlot
-        :path="geometry?.path ?? null"
+        v-else
+        :path="geometry.path"
         accept=".json"
         root="res://meshes/"
         @click="openMenu"
@@ -51,7 +62,7 @@ function openMenu(event: MouseEvent): void {
       />
     </PropRow>
     <template v-if="geometry">
-      <PropRow label="Type" :reset="() => node && store.resetGeometryType(node.id)">
+      <PropRow label="Geometry" :reset="() => node && store.resetGeometryType(node.id)">
         <select :value="geometry.type" @change="onType">
           <option v-for="entry in GEOMETRY_CATALOG" :key="entry.type" :value="entry.type">{{ entry.label }}</option>
         </select>
@@ -75,6 +86,5 @@ function openMenu(event: MouseEvent): void {
       </PropRow>
       <div v-if="geometry.users > 1" class="hint">Shared by {{ geometry.users }} nodes.</div>
     </template>
-    <div v-else class="hint">This mesh was loaded with its own geometry. Create a primitive to replace it.</div>
   </Section>
 </template>
