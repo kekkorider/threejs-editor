@@ -48,6 +48,7 @@ import {
 import {
   ShaderGraphClient,
   graphHasNodes,
+  graphMatchesIgnoringFlags,
   patchGraphMaterialSettings,
   shaderEditorUrl,
   type ShaderCodePayload,
@@ -1748,11 +1749,35 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   function setMaterialFlags(id: string, patch: { side?: MaterialSide, transparent?: boolean, wireframe?: boolean }): void {
+    void commitMaterialFlags(id, patch)
+  }
+
+  async function commitMaterialFlags(id: string, patch: { side?: MaterialSide, transparent?: boolean, wireframe?: boolean }): Promise<void> {
+    await absorbLiveShaderGraph(id)
     const part = patch.side ? 'Cull' : patch.transparent !== undefined ? 'Transparent' : 'Wireframe'
     record(`${part} ${materialLabel(id)}`, () => {
       engine.setMaterialFlags(id, patch)
     }, { merge: false })
-    publishShaderMaterial(id)
+    await publishShaderMaterial(id)
+  }
+
+  async function absorbLiveShaderGraph(materialId: string): Promise<void> {
+    const client = shaderClient
+    if (!shaderAccepting || shaderMaterialId.value !== materialId || !client) return
+    const token = shaderToken
+    shaderAccepting = false
+    try {
+      const [graph, code] = await Promise.all([client.getGraph(), client.getCode()])
+      if (token !== shaderToken || shaderMaterialId.value !== materialId) return
+      if (!graphHasNodes(graph.graphData)) return
+      shaderLastGraph = JSON.stringify(graph.graphData)
+      engine.applyShaderDocument(materialId, graph.graphData, code.material)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      shaderStatus.value = message
+    } finally {
+      if (token === shaderToken) shaderAccepting = true
+    }
   }
 
   function setMaterialName(id: string, name: string): void {
@@ -1848,7 +1873,8 @@ export const useEditorStore = defineStore('editor', () => {
     shaderClient.arm()
     const editorUrl = new URL(shaderEditorUrl(shaderDocId(materialId)))
     editorUrl.searchParams.set('hostReload', String(mine))
-    iframe.src = editorUrl.toString()
+    if (host === window) iframe.src = editorUrl.toString()
+    else host.postMessage({ source: 'tsl-graph-host', type: 'tsl-host:open', src: editorUrl.toString() }, window.location.origin)
     try {
       await shaderClient.waitReady()
     } catch (error) {
@@ -1953,18 +1979,31 @@ export const useEditorStore = defineStore('editor', () => {
     }
     shaderPlacement.value = 'window'
     shaderPopup = popup
-    let started = false
-    const start = (): void => {
-      if (started || popup.closed || shaderPopup !== popup) return
-      const frame = popup.document.getElementById('frame')
-      if (!(frame instanceof HTMLIFrameElement)) return
-      started = true
+    let attempts = 0
+    const attachTimer = window.setInterval(() => {
+      if (shaderPopup !== popup || popup.closed) {
+        window.clearInterval(attachTimer)
+        return
+      }
+      attempts += 1
+      let frame: HTMLIFrameElement | null = null
+      try {
+        const node = popup.document.getElementById('frame')
+        if (node && node.tagName === 'IFRAME' && popup.document.readyState === 'complete') frame = node as HTMLIFrameElement
+      } catch {
+        frame = null
+      }
+      if (!frame) {
+        if (attempts > 200) window.clearInterval(attachTimer)
+        return
+      }
+      window.clearInterval(attachTimer)
       shaderFallbackFrame = frame
-      popup.document.title = `Node Editor - ${shaderTitle(materialId)}`
+      try {
+        popup.document.title = `Node Editor - ${shaderTitle(materialId)}`
+      } catch { /* popup document not ready */ }
       void beginShaderSession(frame, popup)
-    }
-    popup.addEventListener('load', start)
-    if (popup.document.readyState === 'complete') start()
+    }, 40)
     window.clearInterval(shaderPopupTimer)
     shaderPopupTimer = window.setInterval(() => {
       if (!shaderPopup || !shaderPopup.closed) return
@@ -1986,15 +2025,25 @@ export const useEditorStore = defineStore('editor', () => {
     if (popup && !popup.closed) popup.close()
   }
 
-  function publishShaderMaterial(id: string): void {
-    if (!shaderAccepting || shaderMaterialId.value !== id || !shaderClient) return
+  async function publishShaderMaterial(id: string): Promise<void> {
+    const client = shaderClient
+    if (!shaderAccepting || shaderMaterialId.value !== id || !client) return
     const graph = shaderGraph(id)
     if (!graph) return
-    shaderLastGraph = JSON.stringify(graph)
-    void shaderClient.load(graph).catch((error: unknown) => {
+    const next = JSON.stringify(graph)
+    if (next === shaderLastGraph) return
+    const token = shaderToken
+    shaderAccepting = false
+    shaderLastGraph = next
+    try {
+      await client.load(graph)
+      if (token === shaderToken) shaderStatus.value = 'Live'
+    } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       shaderStatus.value = message
-    })
+    } finally {
+      if (token === shaderToken) shaderAccepting = true
+    }
   }
 
   function openShaderEditor(materialId: string): void {
@@ -2063,13 +2112,26 @@ export const useEditorStore = defineStore('editor', () => {
   })
 
   watch(revision, () => {
-    if (!shaderAccepting || !shaderMaterialId.value) return
-    const graph = shaderGraph(shaderMaterialId.value)
-    if (JSON.stringify(graph ?? null) === shaderLastGraph) return
+    if (!shaderAccepting || !shaderMaterialId.value || !shaderClient) return
+    const id = shaderMaterialId.value
+    const graph = shaderGraph(id)
+    const next = JSON.stringify(graph ?? null)
+    if (next === shaderLastGraph) return
     const frameNode = shaderFrameElement()
     const host = shaderClientHost
     if (!frameNode || !host || host.closed) return
-    void beginShaderSession(frameNode, host)
+    let previous: unknown = null
+    try {
+      previous = shaderLastGraph ? JSON.parse(shaderLastGraph) as unknown : null
+    } catch {
+      previous = null
+    }
+    if (graph && graphMatchesIgnoringFlags(previous, graph)) return
+    if (!graph) {
+      void beginShaderSession(frameNode, host)
+      return
+    }
+    void publishShaderMaterial(id)
   })
 
   watch(shaderMaterialId, (id) => {
@@ -3215,6 +3277,33 @@ export const useEditorStore = defineStore('editor', () => {
     showPopup(anchor.getBoundingClientRect(), items, false)
   }
 
+  function resourceMenu(resources: Iterable<{ id: string, name: string }>, assign: (id: string) => void): MenuItem[] {
+    const items = [...resources]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((resource) => ({
+        label: resource.name,
+        action: () => assign(resource.id),
+      }))
+    if (items.length) return items
+    return [{ label: 'None', disabled: true, action: () => {} }]
+  }
+
+  function openExistingGeometryMenu(nodeId: string, anchor: HTMLElement): void {
+    showPopup(anchor.getBoundingClientRect(), resourceMenu(engine.geometries.values(), (geometryId) => {
+      record(`Geometry ${nodeLabel(nodeId)}`, () => {
+        engine.assignGeometry(nodeId, geometryId)
+      }, { merge: false })
+    }), false)
+  }
+
+  function openExistingMaterialMenu(nodeId: string, anchor: HTMLElement): void {
+    showPopup(anchor.getBoundingClientRect(), resourceMenu(engine.materials.values(), (materialId) => {
+      record(`Material ${nodeLabel(nodeId)}`, () => {
+        engine.assignMaterial(nodeId, materialId)
+      }, { merge: false })
+    }), false)
+  }
+
   function isNodeInGroup(id: string | null, group: string, scope?: GroupScope): boolean {
     void revision.value
     if (!id) return false
@@ -4144,6 +4233,8 @@ export const useEditorStore = defineStore('editor', () => {
     openComponentFileMenu,
     openGeometryMenu,
     openMaterialMenu,
+    openExistingGeometryMenu,
+    openExistingMaterialMenu,
     onKeyDown,
     onPointerDown,
     undo,

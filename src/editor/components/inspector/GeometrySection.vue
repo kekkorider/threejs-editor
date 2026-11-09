@@ -32,6 +32,12 @@ function scrubParam(spec: ParamSpec, delta: number): void {
   writeParam(spec, next)
 }
 
+function openExisting(event: MouseEvent): void {
+  const id = node.value?.id
+  if (!id) return
+  store.openExistingGeometryMenu(id, event.currentTarget as HTMLElement)
+}
+
 function openMenu(event: MouseEvent): void {
   const id = node.value?.id
   if (!id) return
@@ -41,8 +47,11 @@ function openMenu(event: MouseEvent): void {
 
 <template>
   <Section v-if="node?.hasGeometry" title="Mesh" section-key="mesh" tone="sub mesh">
-    <PropRow label="configuration">
-      <button v-if="!geometry" type="button" class="btn" @click="store.openCreateResource('geometry', node.id)">Create Geometry</button>
+    <PropRow label="Configuration">
+      <div v-if="!geometry" class="row-actions">
+        <button type="button" class="btn" @click="openExisting">Add existing</button>
+        <button type="button" class="btn" @click="store.openCreateResource('geometry', node.id)">Create new</button>
+      </div>
       <ResourceSlot
         v-else
         :path="geometry.path"

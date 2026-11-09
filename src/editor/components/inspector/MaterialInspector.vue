@@ -1,15 +1,11 @@
 <script setup lang="ts">
-import { TSL_PRESETS, type MaterialSide } from '../../tsl'
+import type { MaterialSide } from '../../tsl'
 import { useEditorStore } from '../../stores/editor'
 import Icon from '../Icon.vue'
 import PropRow from './PropRow.vue'
 import Section from './Section.vue'
 
 const store = useEditorStore()
-
-function onPreset(event: Event): void {
-  store.applyBoundPreset((event.target as HTMLSelectElement).value)
-}
 
 function onSide(event: Event): void {
   const material = store.inspectedMaterial
@@ -37,12 +33,6 @@ function onName(event: Event): void {
     <Section title="Material" section-key="material-file" tone="sub mat">
       <PropRow label="Name" :reset="() => store.inspectedMaterial && store.resetMaterialName(store.inspectedMaterial.id)">
         <input type="text" :value="store.inspectedMaterial.name" @change="onName" />
-      </PropRow>
-      <PropRow label="Preset" :reset="() => store.inspectedMaterial && store.resetMaterialSource(store.inspectedMaterial.id)">
-        <select :value="store.inspectedMaterial.presetId" @change="onPreset">
-          <option value="custom">Custom</option>
-          <option v-for="preset in TSL_PRESETS" :key="preset.id" :value="preset.id">{{ preset.name }}</option>
-        </select>
       </PropRow>
       <PropRow label="Cull" :reset="() => store.inspectedMaterial && store.resetMaterialFlag(store.inspectedMaterial.id, 'side')">
         <select :value="store.inspectedMaterial.side" @change="onSide">

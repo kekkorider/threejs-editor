@@ -139,6 +139,36 @@ export function patchGraphMaterialSettings(
   return copy
 }
 
+/** True when two graphs differ only by surface Cull and Transparent inputs. */
+export function graphMatchesIgnoringFlags(a: unknown, b: unknown): boolean {
+  return JSON.stringify(withoutMaterialFlags(a)) === JSON.stringify(withoutMaterialFlags(b))
+}
+
+function withoutMaterialFlags(graph: unknown): unknown {
+  if (!graph || typeof graph !== 'object') return graph ?? null
+  let copy: unknown
+  try {
+    copy = JSON.parse(JSON.stringify(graph)) as unknown
+  } catch {
+    return graph
+  }
+  for (const node of materialNodes(copy)) {
+    const type = materialNodeType(node)
+    if (!SURFACE_MATERIALS.has(type)) continue
+    const data = asRecord(node.data)
+    if (!data) continue
+    const values = asRecord(data.values)
+    if (values) {
+      delete values.side
+      delete values.transparent
+    }
+    if (Array.isArray(data.activeInputs)) {
+      data.activeInputs = data.activeInputs.filter((item) => item !== 'side' && item !== 'transparent')
+    }
+  }
+  return copy
+}
+
 /** Keep generated `material.side` and `material.transparent` lines equal to the inspector. */
 export function rewriteMaterialFlagCode(code: string, side: MaterialSide, transparent: boolean): string {
   let next = upsertMaterialAssignment(code, 'side', String(sideToMaterialValue(side)))
