@@ -2,6 +2,7 @@
 import HistoryPanel from './HistoryPanel.vue'
 import OutputPanel from './OutputPanel.vue'
 import PhysicsPanel from './PhysicsPanel.vue'
+import ShaderGraphWindow from './ShaderGraphWindow.vue'
 import TslEditor from './TslEditor.vue'
 import { useEditorStore } from '../stores/editor'
 
@@ -12,12 +13,14 @@ const store = useEditorStore()
   <section class="bottom">
     <div class="bottom-tabs">
       <button type="button" class="bottom-tab" :class="{ active: store.bottomTab === 'tsl' }" @click="store.bottomTab = 'tsl'">TSL</button>
+      <button type="button" class="bottom-tab" :class="{ active: store.bottomTab === 'shader' }" @click="store.bottomTab = 'shader'">Node Editor</button>
       <button type="button" class="bottom-tab" :class="{ active: store.bottomTab === 'output' }" @click="store.bottomTab = 'output'">Output</button>
       <button type="button" class="bottom-tab" :class="{ active: store.bottomTab === 'history' }" @click="store.bottomTab = 'history'">History</button>
       <button type="button" class="bottom-tab" :class="{ active: store.bottomTab === 'physics' }" @click="store.bottomTab = 'physics'">Physics</button>
     </div>
     <div class="bottom-body" :data-tab="store.bottomTab">
       <TslEditor />
+      <ShaderGraphWindow />
       <OutputPanel />
       <HistoryPanel />
       <PhysicsPanel />

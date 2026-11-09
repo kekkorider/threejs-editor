@@ -17,6 +17,7 @@ import {
   writeSettings,
   writeMeshFile,
   writeText,
+  type ShaderCodeFile,
 } from './projectFs'
 import type { MaterialSide } from './tsl'
 
@@ -47,6 +48,10 @@ export interface SceneMaterialRecord {
   wireframe: boolean
   /** `res://` material file. Older scene files omit it. */
   path?: string
+  /** Node graph. Older material files omit it. */
+  graph?: unknown
+  /** Compiled node graph. Older material files omit it. */
+  code?: ShaderCodeFile
 }
 
 export interface SceneNodeRecord {
@@ -241,6 +246,8 @@ export function externalizeScene(file: SceneFile): SceneFile {
       side: record.side,
       transparent: record.transparent,
       wireframe: record.wireframe,
+      graph: record.graph,
+      code: record.code,
     }, true)
   }
   return {

@@ -53,6 +53,17 @@ export interface MeshFile {
   params: Record<string, number>
 }
 
+export interface ShaderImportFile {
+  from: string
+  imports: string[]
+}
+
+/** Compiled node graph. `code` is the `tslGraph(material)` function. */
+export interface ShaderCodeFile {
+  code: string
+  imports: ShaderImportFile[]
+}
+
 export interface MaterialFile {
   version: 1
   name: string
@@ -60,6 +71,10 @@ export interface MaterialFile {
   side: MaterialSide
   transparent: boolean
   wireframe: boolean
+  /** Node graph from the shader window. Absent on a text-only material. */
+  graph?: unknown
+  /** Compiled graph. Present when `graph` has nodes. */
+  code?: ShaderCodeFile
 }
 
 interface ServerEntry {
@@ -452,7 +467,17 @@ export function readMeshFile(path: string): MeshFile | null {
 }
 
 export function writeMaterialFile(path: string, file: MaterialFile, quiet = false): void {
-  writeText(path, `${JSON.stringify({ ...file, version: 1 }, null, 2)}\n`, quiet)
+  const body: MaterialFile = {
+    version: 1,
+    name: file.name,
+    source: file.source,
+    side: file.side,
+    transparent: file.transparent,
+    wireframe: file.wireframe,
+  }
+  if (file.graph) body.graph = file.graph
+  if (file.code?.code) body.code = { code: file.code.code, imports: file.code.imports }
+  writeText(path, `${JSON.stringify(body, null, 2)}\n`, quiet)
 }
 
 export function readMaterialFile(path: string): MaterialFile | null {
@@ -463,7 +488,18 @@ export function readMaterialFile(path: string): MaterialFile | null {
     if (parsed.version !== 1 || typeof parsed.name !== 'string' || typeof parsed.source !== 'string') return null
     if (parsed.side !== 'front' && parsed.side !== 'back' && parsed.side !== 'double') return null
     if (typeof parsed.transparent !== 'boolean' || typeof parsed.wireframe !== 'boolean') return null
-    return parsed
+    const graph = readShaderGraph(parsed.graph)
+    const code = readShaderCode(parsed.code)
+    return {
+      version: 1,
+      name: parsed.name,
+      source: parsed.source,
+      side: parsed.side,
+      transparent: parsed.transparent,
+      wireframe: parsed.wireframe,
+      ...(graph ? { graph } : {}),
+      ...(code ? { code } : {}),
+    }
   } catch {
     return null
   }
@@ -501,6 +537,31 @@ export function retarget(path: string, from: string, to: string): string {
   if (path === from) return to
   if (path.startsWith(`${from}/`)) return `${to}${path.slice(from.length)}`
   return path
+}
+
+function readShaderGraph(value: unknown): unknown | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  return value
+}
+
+function readShaderCode(value: unknown): ShaderCodeFile | null {
+  if (!value || typeof value !== 'object') return null
+  const code = (value as { code?: unknown }).code
+  if (typeof code !== 'string' || !code.trim()) return null
+  return { code, imports: readShaderImports((value as { imports?: unknown }).imports) }
+}
+
+function readShaderImports(value: unknown): ShaderImportFile[] {
+  if (!Array.isArray(value)) return []
+  const imports: ShaderImportFile[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const from = (item as { from?: unknown }).from
+    const names = (item as { imports?: unknown }).imports
+    if (typeof from !== 'string' || !Array.isArray(names)) continue
+    imports.push({ from, imports: names.filter((name): name is string => typeof name === 'string') })
+  }
+  return imports
 }
 
 function migrateLegacyResources(): void {

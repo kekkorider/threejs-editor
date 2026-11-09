@@ -47,6 +47,8 @@ const PATHS: Record<string, string> = {
   'chevron-down': `<path d="M3.5 6 8 10.5 12.5 6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>`,
   close: `<path d="M3.5 3.5 12.5 12.5M12.5 3.5 3.5 12.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>`,
   expand: `<path d="M9 2.5h4.5V7M7 13.5H2.5V9M14 2.5 9.2 7.3M2.5 13.5 7.3 8.7" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>`,
+  'pop-out': `<rect x="1.8" y="6.2" width="8.2" height="7.2" rx="1.1" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8.4 2.2h5.4V7.6M13.8 2.2 7.6 8.4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>`,
+  'dock-bottom': `<rect x="2" y="9.2" width="12" height="4.6" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 1.8v5.2M5.6 4.8 8 7.2l2.4-2.4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>`,
   help: `<circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M6.2 6.3a1.8 1.8 0 0 1 3.4.8c0 1.2-1.6 1.5-1.6 2.6" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="8" cy="11.4" r="0.7" fill="currentColor"/>`,
   back: `<path d="M10 3.2 5.2 8 10 12.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>`,
   forward: `<path d="M6 3.2 10.8 8 6 12.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>`,
