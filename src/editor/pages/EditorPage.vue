@@ -17,7 +17,6 @@ import PopupMenu from '../components/PopupMenu.vue'
 import SceneDock from '../components/SceneDock.vue'
 import SceneFileDialog from '../components/SceneFileDialog.vue'
 import ScriptScreen from '../components/ScriptScreen.vue'
-import ShaderGraphWindow from '../components/ShaderGraphWindow.vue'
 import TopBar from '../components/TopBar.vue'
 import Viewport from '../components/Viewport.vue'
 import { useEditorStore } from '../stores/editor'
@@ -166,6 +165,5 @@ onBeforeUnmount(() => {
     <ComponentWarning />
     <PhysicsBodiesWarning />
     <HelpDialog v-if="store.helpTopic" />
-    <ShaderGraphWindow v-if="store.shaderOpen" />
   </div>
 </template>

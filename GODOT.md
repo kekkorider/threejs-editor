@@ -11,10 +11,10 @@ When a feature lands, move it from **Not yet** into **Already in place**. Do not
 ### Shell
 
 - Top menus: Scene, Project, Debug, Editor, Help.
-- Docks: Scene tree, File system, Inspector, Script, and a bottom panel with TSL and Output.
+- Docks: Scene tree, File system, Inspector, Script, and a bottom panel with TSL, Node Editor, Output, History, and Physics.
 - Screens: 3D, Script, Game, AssetLib. The 2D screen was removed on purpose. Everything in this editor is 3D.
 - Draggable splitters. Dragging the File system splitter upward makes that dock taller. Dragging the Node splitter upward makes that dock taller. The sizes are saved in `settings.json`.
-- Create Node dialog, grouped as Node, Mesh, Camera, and Light.
+- Create Node dialog, grouped as Node, Mesh, Camera, Light, and Resource. Resource creates a material file or a geometry file. The dialog sets the name and every parameter for that file.
 - Right-click menus on the scene tree and on inspector values.
 
 ### Scene tree
@@ -48,7 +48,8 @@ When a feature lands, move it from **Not yet** into **Already in place**. Do not
 - Property filter.
 - Transform. New meshes start at position `[0, 0, 0]`, rotation `[0, 0, 0]`, scale `[1, 1, 1]`.
 - Geometry type and parameters, including shared geometry.
-- Mesh and Geometry groups on a mesh. Mesh has a resource slot for a mesh JSON file, plus the geometry type and parameters. Geometry has a Material Override slot for a material JSON file, plus the material name, TSL preset, cull mode, transparency, wireframe, and Cast Shadow. Drag a file from the File system onto the slot to assign it. The slot shows `[empty]` when nothing is assigned. Click the slot for New, Make Unique, Clear, and the other files of that type.
+- Mesh group on a mesh. The configuration row holds the geometry file. The Geometry row holds the primitive type and its parameters. With no geometry file, configuration shows Create Geometry. That button opens the Create Node dialog on Geometry. Drag a mesh file onto the slot to assign it. Click the slot for New, Make Unique, Clear, and the other files of that type.
+- Material group on a mesh. It holds one Edit material button. The button opens that material in the Inspector: Open Node Editor, then name, preset, cull, transparency, and wireframe. A single click on a material file does the same, and the TSL panel shows that material's code. Cast Shadow sits under Visibility.
 - Projection holds the camera frustum. Camera holds Current, Preview, Sync Viewport, and Layers. View Offset stays its own group.
 - Light holds color, energy, ground, and Look at. Omni holds Range. Spot holds Range, Angle, and Penumbra.
 - Light color, energy, range, spot angle, penumbra, and Look at for directional and spot lights.
@@ -77,7 +78,7 @@ When a feature lands, move it from **Not yet** into **Already in place**. Do not
 
 - Primitive meshes under `res://meshes`.
 - TSL materials under `res://materials`, with presets (Lit, Metal, UV, Checker, and the others in the create dialog).
-- Edit Shader opens the node editor in its own window. Double-click a material file to open the same window. Each edit applies to every mesh that uses that material. The node graph is stored in the material JSON file. The File system lists that file without `.json`.
+- Open Node Editor shows the node editor in the bottom panel, beside TSL and Output. Double-click a material file to open the same tab. Each edit applies to every mesh that uses that material. The node graph is stored in the material JSON file. The File system lists that file without `.json`. A single click on the file shows its code in the TSL panel and its settings in the Inspector.
 - The starter scene is one 1×1×1 cube at `[0, 0, 0]` with the Lit material.
 
 ### Lighting

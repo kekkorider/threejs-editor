@@ -8,6 +8,7 @@ import ComponentSection from './inspector/ComponentSection.vue'
 import GeometrySection from './inspector/GeometrySection.vue'
 import GridSection from './inspector/GridSection.vue'
 import LightSection from './inspector/LightSection.vue'
+import MaterialInspector from './inspector/MaterialInspector.vue'
 import MaterialSection from './inspector/MaterialSection.vue'
 import EnvironmentSection from './inspector/EnvironmentSection.vue'
 import TransformSection from './inspector/TransformSection.vue'
@@ -31,7 +32,8 @@ function onName(event: Event): void {
       <input v-model="store.inspectorFilter" class="filter inspector-filter" placeholder="Filter properties" />
     </div>
     <div class="inspector">
-      <template v-if="store.selectedComponent">
+      <MaterialInspector v-if="store.inspectedMaterial" />
+      <template v-else-if="store.selectedComponent">
         <div class="node-head">
           <span class="kind-icon component">
             <Icon name="component" />

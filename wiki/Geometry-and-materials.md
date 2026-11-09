@@ -59,7 +59,8 @@ The material file is `res://materials/Name.json`.
 The File system lists `Name`.
 The source is the TSL text.
 The bottom panel edits that text for the bound material.
-Edit Shader opens the node editor in its own window.
+A single click on the material file shows this code.
+Open Node Editor shows the node editor in the bottom panel.
 The node graph is stored in the same JSON file.
 
 ## Shared materials

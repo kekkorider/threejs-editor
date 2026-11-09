@@ -2094,6 +2094,21 @@ export class EditorState {
     this.touchScene()
   }
 
+  addMaterialFile(name: string, source: string, flags: MaterialFlags): MaterialResource {
+    const resource = this.createMaterialResource(name.trim() || 'Material', source, flags)
+    const compiled = this.compileMaterial(resource.id)
+    if (!compiled.ok) {
+      this.materials.delete(resource.id)
+      throw new Error(compiled.error)
+    }
+    this.persistMaterialFile(resource)
+    return resource
+  }
+
+  addGeometryFile(name: string, type: GeometryType, params: Record<string, number>): GeometryResource {
+    return this.createGeometryResource(type, params, name.trim() || undefined, { persist: true })
+  }
+
   newMaterialFor(nodeId: string, presetId = 'lit'): MaterialResource | null {
     const node = this.nodes.get(nodeId)
     if (!node || node.kind !== 'MeshInstance3D') return null

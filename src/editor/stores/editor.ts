@@ -182,10 +182,15 @@ export interface InspectorView {
 
 export interface CreateDraft {
   kind: NodeKind
+  resource: 'node' | 'material' | 'geometry'
   name: string
   geometryType: GeometryType
   params: Record<string, number>
   source: string
+  side: MaterialSide
+  transparent: boolean
+  wireframe: boolean
+  assignNodeId: string | null
   color: string
   ground: string
   intensity: number
@@ -239,6 +244,8 @@ export const useEditorStore = defineStore('editor', () => {
   const marquee = ref<{ x: number, y: number, width: number, height: number } | null>(null)
   const rootId = ref('')
   const boundMaterialId = ref<string | null>(null)
+  const inspectorMaterialId = ref<string | null>(null)
+  let tslLoaded = ''
   const tslSource = ref('// Select a mesh and assign a TSL material.\n')
   const tslDisabled = ref(true)
   const tslPresetId = ref('custom')
@@ -248,9 +255,7 @@ export const useEditorStore = defineStore('editor', () => {
   const shaderOpen = ref(false)
   const shaderMaterialId = ref<string | null>(null)
   const shaderStatus = ref('')
-  const shaderHost = shallowRef<Window | null>(null)
   let shaderFollowId: string | null = null
-  let shaderPopupWatch = 0
   let shaderClient: ShaderGraphClient | null = null
   let shaderClientHost: Window | null = null
   let shaderClientFrame: HTMLIFrameElement | null = null
@@ -279,7 +284,7 @@ export const useEditorStore = defineStore('editor', () => {
   const inspectorFilter = ref('')
   const expanded = ref(new Set<string>())
   const collapsed = ref(new Set<string>())
-  const bottomTab = ref<'tsl' | 'output' | 'history' | 'physics'>('tsl')
+  const bottomTab = ref<'tsl' | 'shader' | 'output' | 'history' | 'physics'>('tsl')
   const physics = ref<PhysicsState>(readPhysicsState())
   const physicsWarning = ref<PhysicsWarning | null>(null)
   const nodeTab = ref<'signals' | 'groups'>('signals')
@@ -291,6 +296,8 @@ export const useEditorStore = defineStore('editor', () => {
   const renamingId = ref<string | null>(null)
   const createOpen = ref(false)
   const createKind = ref<NodeKind>('MeshInstance3D')
+  const createResource = ref<'node' | 'material' | 'geometry'>('node')
+  const createAssignNodeId = ref<string | null>(null)
   const createPreset = ref('')
   const createNonce = ref(0)
   const componentOpen = ref(false)
@@ -524,6 +531,24 @@ export const useEditorStore = defineStore('editor', () => {
   const gridSettings = computed((): GridSettings => {
     void revision.value
     return engine.gridSettings()
+  })
+
+  const inspectedMaterial = computed(() => {
+    void revision.value
+    const id = inspectorMaterialId.value
+    if (!id) return null
+    const material = engine.materials.get(id)
+    if (!material) return null
+    return {
+      id: material.id,
+      name: material.name,
+      path: material.path,
+      side: material.side,
+      transparent: material.transparent,
+      wireframe: material.wireframe,
+      error: material.error,
+      presetId: material.graph ? 'custom' : matchingPresetId(material.source) ?? 'custom',
+    }
   })
 
   function describe(node: EditorNode): InspectorView {
@@ -884,9 +909,14 @@ export const useEditorStore = defineStore('editor', () => {
     metaTris.value = mesh ? Math.round(triangleCount(mesh.geometry)) : 0
   }
 
+  function materialCode(resource: { source: string, code: { code: string } | null }): string {
+    const generated = resource.code?.code
+    return generated && generated.trim() ? generated : resource.source
+  }
+
   function refreshTslBar(): void {
     const resource = boundMaterialId.value ? engine.materials.get(boundMaterialId.value) : undefined
-    tslName.value = resource ? `${resource.name}.tsl` : 'No TSL material'
+    tslName.value = resource?.name ?? 'No TSL material'
     tslPresetId.value = resource?.graph ? 'custom' : resource ? matchingPresetId(resource.source) ?? 'custom' : 'custom'
     tslError.value = Boolean(resource?.error)
     tslStatus.value = resource?.error ?? (resource ? 'Compiled' : '')
@@ -894,15 +924,21 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   function syncMaterial(force: boolean, explicitId?: string | null): void {
-    const id = explicitId === undefined ? engine.selected()?.materialId ?? null : explicitId
-    if (!force && id === boundMaterialId.value) {
+    const id = explicitId !== undefined
+      ? explicitId
+      : inspectorMaterialId.value ?? engine.selected()?.materialId ?? null
+    const resource = id ? engine.materials.get(id) : undefined
+    const next = resource ? materialCode(resource) : (id ? '' : '// Select a mesh and assign a TSL material.\n')
+    const same = id === boundMaterialId.value
+    const dirty = tslSource.value !== tslLoaded
+    if (!force && same && dirty) {
       refreshTslBar()
       return
     }
     boundMaterialId.value = id
-    const resource = id ? engine.materials.get(id) : undefined
     tslDisabled.value = !resource
-    tslSource.value = resource?.source ?? (id ? '' : '// Select a mesh and assign a TSL material.\n')
+    tslSource.value = next
+    tslLoaded = next
     refreshTslBar()
   }
 
@@ -917,6 +953,7 @@ export const useEditorStore = defineStore('editor', () => {
 
   function select(id: string | null): void {
     selectedComponentId.value = null
+    inspectorMaterialId.value = null
     focusDock.value = 'scene'
     engine.select(id)
     touch()
@@ -925,6 +962,7 @@ export const useEditorStore = defineStore('editor', () => {
   function selectPicked(id: string | null, shift: boolean, ctrl: boolean): void {
     if ((shift || ctrl) && !id) return
     selectedComponentId.value = null
+    inspectorMaterialId.value = null
     focusDock.value = 'scene'
     keepAnchor = Boolean(shift && id)
     try {
@@ -980,6 +1018,7 @@ export const useEditorStore = defineStore('editor', () => {
 
   function selectFromTree(id: string, shift: boolean, ctrl: boolean): void {
     selectedComponentId.value = null
+    inspectorMaterialId.value = null
     focusDock.value = 'scene'
     const order = visibleNodeIds()
     const from = anchorId ? order.indexOf(anchorId) : -1
@@ -1776,56 +1815,8 @@ export const useEditorStore = defineStore('editor', () => {
     return engine.materials.get(materialId)?.graph ?? null
   }
 
-  function openShaderPopup(): void {
-    const existing = shaderHost.value
-    if (existing && !existing.closed) {
-      existing.focus()
-      return
-    }
-    const popup = window.open('', 'threejs-shader-editor', 'popup=yes,width=1120,height=780')
-    if (!popup) {
-      shaderHost.value = null
-      return
-    }
-    popup.document.open()
-    popup.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>Shader</title><style>html,body{margin:0;height:100%;background:#111;color:#ddd;font:12px sans-serif}#shader-status{height:22px;line-height:22px;padding:0 8px;background:#1b1b1b;border-bottom:1px solid #333}iframe{border:0;width:100%;height:calc(100% - 23px);display:block}</style></head><body><div id="shader-status">Opening the shader editor.</div><iframe id="shader-frame" title="Shader editor"></iframe></body></html>')
-    popup.document.close()
-    const bridge = popup.document.createElement('script')
-    bridge.textContent = `window.addEventListener('message', function (event) {
-  if (event.source !== window.opener) return
-  var data = event.data
-  if (!data || data.source !== 'tsl-graph-host' || typeof data.type !== 'string') return
-  var frame = document.getElementById('shader-frame')
-  if (!frame || !frame.contentWindow) return
-  frame.contentWindow.postMessage(data, 'https://www.tsl-graph.xyz')
-})`
-    popup.document.body.appendChild(bridge)
-    shaderHost.value = markRaw(popup)
-    const openedAt = Date.now()
-    popup.addEventListener('pagehide', () => {
-      if (Date.now() - openedAt < 400) return
-      if (shaderHost.value === popup) closeShaderEditor()
-    })
-    window.clearInterval(shaderPopupWatch)
-    shaderPopupWatch = window.setInterval(() => {
-      if (!popup.closed) return
-      window.clearInterval(shaderPopupWatch)
-      if (shaderHost.value === popup) closeShaderEditor()
-    }, 400)
-  }
-
   function shaderFrameElement(): HTMLIFrameElement | null {
-    const host = shaderHost.value
-    if (host && !host.closed) {
-      const node = host.document.getElementById('shader-frame')
-      if (node && node.tagName === 'IFRAME') return node as HTMLIFrameElement
-    }
     return shaderFallbackFrame
-  }
-
-  function messageHost(): Window {
-    const host = shaderHost.value
-    return host && !host.closed ? host : window
   }
 
   async function beginShaderSession(iframe: HTMLIFrameElement, host: Window): Promise<void> {
@@ -1853,7 +1844,6 @@ export const useEditorStore = defineStore('editor', () => {
     const editorUrl = new URL(shaderEditorUrl(shaderDocId(materialId)))
     editorUrl.searchParams.set('hostReload', String(mine))
     iframe.src = editorUrl.toString()
-    if (!host.closed) host.document.title = `Shader - ${shaderTitle(materialId)}`
     try {
       await shaderClient.waitReady()
     } catch (error) {
@@ -1910,7 +1900,6 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   function closeShaderEditor(): void {
-    window.clearInterval(shaderPopupWatch)
     shaderAccepting = false
     shaderToken += 1
     shaderClient?.destroy()
@@ -1922,14 +1911,10 @@ export const useEditorStore = defineStore('editor', () => {
     shaderMaterialId.value = null
     shaderStatus.value = ''
     shaderFollowId = null
-    const popup = shaderHost.value
-    shaderHost.value = null
-    if (popup && !popup.closed) popup.close()
   }
 
   function attachShaderFrame(iframe: HTMLIFrameElement): void {
     shaderFallbackFrame = iframe
-    if (shaderHost.value && !shaderHost.value.closed) return
     void beginShaderSession(iframe, window)
   }
 
@@ -1939,12 +1924,8 @@ export const useEditorStore = defineStore('editor', () => {
     shaderMaterialId.value = materialId
     shaderStatus.value = 'Opening the shader editor.'
     shaderOpen.value = true
-    openShaderPopup()
-    const host = shaderHost.value
-    const resource = engine.materials.get(materialId)
-    if (host && !host.closed && resource) host.document.title = `Shader - ${resource.name}`
-    const frameNode = shaderFrameElement()
-    if (frameNode) void beginShaderSession(frameNode, messageHost())
+    bottomCollapsed.value = false
+    bottomTab.value = 'shader'
   }
 
   function openShaderForNode(nodeId: string): void {
@@ -1967,8 +1948,6 @@ export const useEditorStore = defineStore('editor', () => {
     const next = engine.selected()?.materialId
     if (!next || next === shaderMaterialId.value) return
     shaderMaterialId.value = next
-    const frameNode = shaderFrameElement()
-    if (frameNode) void beginShaderSession(frameNode, messageHost())
   }
 
   function applyShaderGraph(materialId: string, graph: unknown, payload: ShaderCodePayload): void {
@@ -2000,11 +1979,8 @@ export const useEditorStore = defineStore('editor', () => {
     engine.patchShaderUniforms(materialId, uniforms)
   }
 
-  watch(shaderStatus, (text) => {
-    const host = shaderHost.value
-    if (!host || host.closed) return
-    const node = host.document.getElementById('shader-status')
-    if (node) node.textContent = text
+  watch(selectedComponentId, (id) => {
+    if (id) inspectorMaterialId.value = null
   })
 
   watch(revision, () => {
@@ -2013,7 +1989,7 @@ export const useEditorStore = defineStore('editor', () => {
     if (JSON.stringify(graph ?? null) === shaderLastGraph) return
     const frameNode = shaderFrameElement()
     if (!frameNode) return
-    void beginShaderSession(frameNode, messageHost())
+    void beginShaderSession(frameNode, window)
   })
 
   function compileBound(log: boolean): void {
@@ -2185,10 +2161,50 @@ export const useEditorStore = defineStore('editor', () => {
     closePopups()
     helpTopic.value = ''
     createKind.value = kind
+    createResource.value = 'node'
+    createAssignNodeId.value = null
     createPreset.value = presetId ?? ''
     createNonce.value += 1
     componentOpen.value = false
     createOpen.value = true
+  }
+
+  function openCreateResource(resource: 'material' | 'geometry', assignNodeId: string | null = null): void {
+    if (!ready.value) return
+    closePopups()
+    helpTopic.value = ''
+    createResource.value = resource
+    createAssignNodeId.value = assignNodeId
+    createPreset.value = ''
+    createNonce.value += 1
+    componentOpen.value = false
+    createOpen.value = true
+  }
+
+  function showMaterialInspector(nodeId: string): void {
+    const existing = engine.materialOf(nodeId)
+    if (!existing) {
+      record(`Material ${nodeLabel(nodeId)}`, () => {
+        engine.newMaterialFor(nodeId, 'lit')
+      }, { material: true, merge: false })
+    }
+    const material = engine.materialOf(nodeId)
+    if (!material) return
+    inspectorMaterialId.value = material.id
+    selectedComponentId.value = null
+    bottomCollapsed.value = false
+    bottomTab.value = 'tsl'
+    syncMaterial(true, material.id)
+  }
+
+  function inspectMaterialPath(path: string): void {
+    const id = engine.ensureMaterial(path)
+    if (!id) return
+    inspectorMaterialId.value = id
+    selectedComponentId.value = null
+    bottomCollapsed.value = false
+    bottomTab.value = 'tsl'
+    syncMaterial(true, id)
   }
 
   function openComponentDialog(resourceId = ''): void {
@@ -2677,8 +2693,62 @@ export const useEditorStore = defineStore('editor', () => {
     touch()
   }
 
+  function revealResource(path: string): void {
+    const parent = parentPath(path)
+    const next = new Set(expandedFiles.value)
+    next.add(parent)
+    expandedFiles.value = next
+    fileSelection.value = [path]
+    fileAnchor = path
+    focusDock.value = 'files'
+  }
+
+  function createResourceFromDraft(draft: CreateDraft): string | null {
+    let message: string | null = null
+    let createdPath = ''
+    let createdMaterialId: string | null = null
+    const label = draft.resource === 'material' ? 'Material' : 'Geometry'
+    recordFiles(`Create ${draft.name.trim() || label}`, () => {
+      try {
+        if (draft.resource === 'material') {
+          const resource = engine.addMaterialFile(draft.name, draft.source, {
+            side: draft.side,
+            transparent: draft.transparent,
+            wireframe: draft.wireframe,
+          })
+          createdPath = resource.path
+          createdMaterialId = resource.id
+          return
+        }
+        const resource = engine.addGeometryFile(draft.name, draft.geometryType, { ...draft.params })
+        createdPath = resource.path
+        if (draft.assignNodeId) engine.assignGeometry(draft.assignNodeId, resource.id)
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error)
+        engine.log(message, 'error')
+      }
+    })
+    if (message) {
+      bottomTab.value = 'output'
+      touch()
+      return message
+    }
+    createOpen.value = false
+    if (createdPath) revealResource(createdPath)
+    if (createdMaterialId) {
+      inspectorMaterialId.value = createdMaterialId
+      bottomCollapsed.value = false
+      bottomTab.value = 'tsl'
+    } else if (draft.assignNodeId) {
+      focusDock.value = 'scene'
+    }
+    touch(Boolean(createdMaterialId))
+    return null
+  }
+
   function createFromDraft(draft: CreateDraft): string | null {
     if (!ready.value) return 'Editor is not ready.'
+    if (draft.resource === 'material' || draft.resource === 'geometry') return createResourceFromDraft(draft)
     const parentId = engine.selectedId
     let message: string | null = null
     record(`Create ${draft.name.trim() || 'Node'}`, () => {
@@ -3022,7 +3092,7 @@ export const useEditorStore = defineStore('editor', () => {
     if (current) {
       items.push({ separator: true, label: '', action: () => {} })
       items.push({
-        label: 'Edit Shader',
+        label: 'Open Node Editor',
         action: () => openShaderForNode(nodeId),
       })
       items.push({
@@ -3489,6 +3559,7 @@ export const useEditorStore = defineStore('editor', () => {
       return
     }
     if (isMaterialFile(path)) {
+      inspectMaterialPath(path)
       openShaderForPath(path)
       return
     }
@@ -3518,6 +3589,7 @@ export const useEditorStore = defineStore('editor', () => {
     fileSelection.value = [path]
     fileAnchor = path
     activateProjectPath(path)
+    if (isMaterialFile(path)) inspectMaterialPath(path)
   }
 
   function deleteFileSelection(): void {
@@ -3704,7 +3776,7 @@ export const useEditorStore = defineStore('editor', () => {
     shaderOpen,
     shaderMaterialId,
     shaderStatus,
-    shaderHost,
+    inspectorMaterialId,
     logs,
     sceneFilter,
     fileFilter,
@@ -3736,6 +3808,8 @@ export const useEditorStore = defineStore('editor', () => {
     renamingId,
     createOpen,
     createKind,
+    createResource,
+    createAssignNodeId,
     createPreset,
     createNonce,
     componentOpen,
@@ -3937,6 +4011,9 @@ export const useEditorStore = defineStore('editor', () => {
     instanceScene,
     makeLocal,
     openCreate,
+    openCreateResource,
+    showMaterialInspector,
+    inspectedMaterial,
     createFromDraft,
     openComponentDialog,
     createComponent,
